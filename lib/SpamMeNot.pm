@@ -1,18 +1,13 @@
 package SpamMeNot;
+use Moose;
+use namespace::autoclean;
 
 use strict;
 use warnings;
 
-use Catalyst::Runtime;
+use Catalyst::Runtime 5.80;
 
-# Set flags and add plugins for the application
-#
-#   ConfigLoader: will load the configuration from a Config::General file in the
-#                 application's home directory
-# Static::Simple: will serve static files from the application's root
-#                 directory
-
-use parent qw/ Catalyst /;
+use parent qw/ Catalyst /; # << required by Catalyst::Engine::Embeddable
 
 BEGIN
 {
@@ -29,13 +24,19 @@ BEGIN
 
    $ENV{DBIC_TRACE}     ||= $ENV{DEBUG_SQL};
 
-   open my $err, '>>/var/log/SpamMeNot/app.log'
+   open my $err, '>>/var/log/spammenot/app.log'
       or die qq{Can't log SpamMeNot Catalyst STDERR! $!};
 
    open STDERR, '>&', $err;
 }
 
-our $VERSION = '0.000001';
+# Set flags and add plugins for the application
+#
+#         -Debug: activates the debug mode for very useful log messages
+#   ConfigLoader: will load the configuration from a Config::General file in the
+#                 application's home directory
+# Static::Simple: will serve static files from the application's root
+#                 directory
 
 use Catalyst qw/
    ConfigLoader
@@ -44,6 +45,10 @@ use Catalyst qw/
    Unicode
 /;
 
+our $VERSION = '0.000001';
+
+extends 'Catalyst';
+
 # Configure the application.
 
 __PACKAGE__->config
@@ -51,10 +56,11 @@ __PACKAGE__->config
    name => 'SpamMeNot',
    default_view => 'TXT',
    alerts_to    => 'SpamMeNot Alerts <internal.server.alerts@spammenot.com>',
+   disable_component_resolution_regex_fallback => 1,
+   enable_catalyst_header => 0, # Send X-Catalyst header
 );
 
 # Start the application
 __PACKAGE__->setup();
-
 
 1;

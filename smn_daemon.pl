@@ -1,4 +1,4 @@
-#!/usr/bin/perl
+#!perl
 
 use strict;
 use warnings;
@@ -198,7 +198,7 @@ sub preparemsg
    my ( $self, $send_data ) = @_;
 
    my $cat_action = delete $send_data->{command};
-   my @pairings   = map { $_ . '=' . $send_data->{ $_ } }, keys %$send_data;
+   my @pairings   = map { $_ . '=' . $send_data->{ $_ } } keys %$send_data;
    my $cat_query  = join('&', @pairings); # XXX how could this line be better written?
 
    return '' unless $cat_action && $cat_query;
@@ -226,7 +226,7 @@ if ( $ENV{DEBUG} ) { warn "I'm starting a server daemon in debug mode\n"; }
 
 my $smnserver = SpamMeNot::Server->new # XXX how can these options be improved?
 (
-   background        => 1,
+   background        => 0,
    proto             => 'tcp',
    port              => 20202,
    min_servers       => 100,
@@ -236,10 +236,11 @@ my $smnserver = SpamMeNot::Server->new # XXX how can these options be improved?
    max_requests      => 15,
    user              => 'nobody',
    group             => 'nogroup',
-   log_file          => '/var/log/spammenot/server.log',
+   log_file          => '/var/log/spammenot/server.log', # !! must be writable by "nobody"
 ) or die "$! - $@";
 
 $smnserver->run();
+
 $smnserver->shutdown_sockets();
 
 __END__
