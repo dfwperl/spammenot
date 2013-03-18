@@ -1,7 +1,11 @@
-#!perl
+#!/usr/bin/perl
 
 use strict;
 use warnings;
+
+use 5.017; # minimum supported version of Perl is 5.17
+
+use encoding 'utf8';
 
 BEGIN
 {
@@ -23,7 +27,7 @@ BEGIN
 }
 
 # no buffering, and shut up catalyst
-BEGIN { ++$|; $SIG{__DIE__} = sub { print '' } }
+BEGIN { ++$|; select STDIN; ++$|; select STDOUT; $SIG{__DIE__} = sub { print '' } }
 
 use HTTP::Request;
 use Data::UUID;
@@ -71,13 +75,20 @@ sub process_request
       local $SIG{ALRM} = sub { die "Timed Out!\n" };
 
       my $previous_alarm = alarm $TIMEOUT;
-      my $incoming_data  = {};
+      my $bytes_read     = 0;
+      my $email_object   = {};
 
-      MAINLOOP: while ( my $line = <STDIN> ) # XXX do you see the error here?
+      $self->stash_headers( \*STDIN );
+
+      use Data::Dumper;
+      warn 'DUMPERING!!!';
+
+      $self->stash_content( \*STDIN );
+
+      my $incoming_data  = {}; # dummy variable XXX
+
+      MAINLOOP: for my $line ( split /\r|\n/, '' )
       {
-         # strip line ending
-         chomp $line;
-
          # check for input
          unless ( length $line )
          {
@@ -98,10 +109,10 @@ sub process_request
 
             warn "Preparing backend request string from input data\n";
 
-            my $msg = $self->preparemsg( $incoming_data );
+            my $msg = $self->preparemsg( $email_object );
 
-            unless ( defined $msg && length $msg ) {
-
+            unless ( defined $msg && length $msg )
+            {
                warn "500 Error: Internal Server Error\n";
 
                print STDOUT "500 Error: Internal Server Error\n";
@@ -186,11 +197,191 @@ sub process_request
       } # end of MAINLOOP
 
       alarm $previous_alarm; # XXX extra credit: what's all this alarm business?
+
+      warn "client disconnected after sending $bytes_read bytes\n";
    };
+
+   $c->stash( mail_headers => undef );
 
    print STDOUT "Timed Out after $TIMEOUT seconds."
       and return
          if $@ =~ /timed out/i;
+}
+
+sub stash_content
+{
+   my ( $file_handle ) = @_;
+
+   my ( $chars_read, $buffer, $content ) = ( 0, '', '' );
+
+   my $offset = $c->stash( 'body_offset' );
+
+   die "Bad call to stash_content() -- need filehandle seek position\n"
+      unless $offset;
+
+   binmode $file_handle, ':unix:encoding(UTF-8)';
+
+   seek $file_handle, $offset, 0;
+
+   # protect ourselves from DOS attacks based on huge messages
+   BODY_READ: while ( $chars_read += read $file_handle, $buffer, 1024 )
+   {
+      $content .= $buffer;
+
+      use bytes;
+
+      if ( length $content > $MAX_MESSAGE_SIZE )
+      {
+         undef $content;
+
+         warn "503 Error: Sorry, that mail message is too big\n";
+
+         print STDOUT "503 Error: Sorry, that mail message is too big\n";
+
+         last BODY_READ and return;
+      }
+   }
+
+   $c->stash( mail_body => $content );
+}
+
+sub read_headers
+{
+   warn 'read_header() called';
+
+   my ( $self, $file_handle, $offset ) = @_;
+
+   my ( @headers, $chars_read, $buffer, $header, $is_last_header );
+
+   $is_last_header = 0;
+   $offset       //= 0;
+   $chars_read     = 0;
+
+   binmode $file_handle, ':unix:encoding(UTF-8)';
+
+   warn "going to try to get a header from file handle";
+
+   seek $file_handle, 0, 0;
+
+   # protect ourselves from DOS attacks based on huge messages
+   HEAD_READ: while ( $chars_read += read $file_handle, $buffer, 1, $offset )
+   {
+      $offset += $chars_read;
+
+      {
+         use bytes;
+
+         if ( length $buffer > $MAX_HEADER_SIZE )
+         {
+            warn "503 Error: Sorry, that mail header is too big (@{[ length $buffer ]} bytes) ($buffer)\n";
+
+            print STDOUT "503 Error: Sorry, that mail header is too big\n";
+
+            no bytes;
+
+            last HEAD_READ and return;
+         }
+      }
+
+      warn "got CRLF" and next HEAD_READ if ( $buffer =~ /\r$/ ); # we hit a CRLF, skip the CR
+
+      if ( $buffer =~ /\n$/ )
+      {
+         warn "hit a newline after $chars_read chars read. current header looks like ($buffer)";
+
+         # we're obviously at the end of the line for the header, but we need
+         # to determine if the next line is an empty newline as well.  That
+         # will tell us if we have read the final header
+
+         chomp $buffer;
+
+         warn "peeking ahead at the next two chars in the file handle";
+
+         # look ahead 2 character (2 chars instead of 1 to accunt for CRLF)
+         my $peek_buffer = '';
+         my $peek_read   = 0;
+
+         warn "peek buffer is @{[ length $peek_buffer ]} chars long before peek read";
+
+         seek $file_handle, 0, 0;
+
+         PEEK: while ( $peek_read = read $file_handle, $peek_buffer, 2, $chars_read )
+         {
+            warn 'peeked!';
+
+            last PEEK;
+         }
+
+         warn "read $peek_read chars; the next two chars were ($peek_buffer)";
+
+         if ( $peek_buffer =~ /(?:\r|\n)/ )
+         {
+            warn 'Looks like we just saw the last header';
+
+            ++$chars_read;
+            ++$is_last_header;
+         }
+
+         push @headers, $buffer;
+
+         return \@headers, $chars_read if $is_last_header;
+
+         $buffer = $peek_buffer;
+      }
+   }
+
+   warn 'this is bad ' x 10;
+   return;
+}
+
+sub stash_headers
+{
+   my ( $self, $file_handle ) = @_;
+   my $headers = {};
+
+   warn "stash_headers() is going to go get the mail headers...";
+
+   my ( $raw_headers, $body_offset ) = $self->read_headers( $file_handle );
+
+   for my $header ( @$raw_headers )
+   {
+      #my ( $header_name, $header_value ) = ( $header ) =~ /([^\W]+)\W{0,}:\W{0,}(.*)/;
+      my ( $header_name, $header_value ) = split /\W{0,}:\W{0,}/, $header, 2;
+
+      say "($header)";
+      say "($header_name) => ($header_value)";
+
+      unless ( defined $header_value && length $header_value )
+      {
+         warn "504 Error: encountered malformed header ($header)\n";
+
+         print STDOUT "504 Error: encountered malformed header\n";
+
+         return;
+      }
+
+      $headers->{ $header_name } //= [];
+
+      push @{ $headers->{ $header_name } }, $header_value;
+   }
+
+   warn 'NO MORE HEADERRRRRRRRRRZZZZZZZZZZZZZZ';
+
+   $c->stash( body_offset  => $body_offset );
+   $c->stash( mail_headers => $headers );
+}
+
+sub get_header
+{
+   my ( $self, $requested_header ) = @_;
+
+   my $headers = $c->stash->{mail_headers};
+
+   return unless exists $headers->{ $requested_header };
+
+   $requested_header = $headers->{ $requested_header };
+
+   return wantarray ? @${ $requested_header } : ${ $requested_header }[0];
 }
 
 sub preparemsg
