@@ -1,7 +1,12 @@
-#!perl
+#!/home/superman/perl5/perlbrew/perls/perl-tommydev/bin/perl
 
 use strict;
 use warnings;
+
+use 5.017; # minimum supported version of Perl is 5.17
+
+#use encoding 'utf8';
+use utf8;
 
 BEGIN
 {
@@ -23,7 +28,8 @@ BEGIN
 }
 
 # no buffering, and shut up catalyst
-BEGIN { ++$|; $SIG{__DIE__} = sub { print '' } }
+BEGIN { select STDIN; ++$|; select STDOUT; $|++; $SIG{__DIE__} = sub { warn "Died.\n"; warn @_ } }
+#BEGIN { ++$|; select STDIN; ++$|; select STDOUT; }
 
 use HTTP::Request;
 use Data::UUID;
@@ -71,13 +77,17 @@ sub process_request
       local $SIG{ALRM} = sub { die "Timed Out!\n" };
 
       my $previous_alarm = alarm $TIMEOUT;
-      my $incoming_data  = {};
+      my $bytes_read     = 0;
+      my $email_object   = {};
 
-      MAINLOOP: while ( my $line = <STDIN> ) # XXX do you see the error here?
+      $self->stash_headers( \*STDIN );
+
+#      $self->stash_content( \*STDIN );
+
+      my $incoming_data  = {}; # dummy variable XXX
+
+      MAINLOOP: for my $line ( split /\r|\n/, '' )
       {
-         # strip line ending
-         chomp $line;
-
          # check for input
          unless ( length $line )
          {
@@ -98,10 +108,10 @@ sub process_request
 
             warn "Preparing backend request string from input data\n";
 
-            my $msg = $self->preparemsg( $incoming_data );
+            my $msg = $self->preparemsg( $email_object );
 
-            unless ( defined $msg && length $msg ) {
-
+            unless ( defined $msg && length $msg )
+            {
                warn "500 Error: Internal Server Error\n";
 
                print STDOUT "500 Error: Internal Server Error\n";
@@ -186,11 +196,244 @@ sub process_request
       } # end of MAINLOOP
 
       alarm $previous_alarm; # XXX extra credit: what's all this alarm business?
+
+      warn "client disconnected after sending $bytes_read bytes\n";
    };
+
+   $c->stash( mail_headers => undef );
 
    print STDOUT "Timed Out after $TIMEOUT seconds."
       and return
          if $@ =~ /timed out/i;
+}
+
+sub stash_content
+{
+   my ( $file_handle ) = shift @_;
+
+   my ( $chars_read, $buffer, $content ) = ( 0, '', '' );
+
+   my $offset = $c->stash->{body_offset};
+
+   die "Bad call to stash_content() -- need filehandle seek position\n"
+      unless $offset;
+
+   binmode $file_handle, ':unix:encoding(UTF-8)';
+#   binmode $file_handle;
+
+   seek $file_handle, $offset, 0;
+
+   # protect ourselves from DOS attacks based on huge messages
+   BODY_READ: while ( $chars_read += read $file_handle, $buffer, 1024 )
+   {
+      $content .= $buffer;
+
+      use bytes;
+
+      if ( length $content > $MAX_MESSAGE_SIZE )
+      {
+         undef $content;
+
+         warn "503 Error: Sorry, that mail message is too big\n";
+
+         print STDOUT "503 Error: Sorry, that mail message is too big\n";
+
+         last BODY_READ and return;
+      }
+   }
+
+   $c->stash( mail_body => $content );
+}
+
+sub read_headers
+{
+   warn 'read_headers() called';
+
+   my ( $self, $file_handle, $offset ) = @_;
+
+   my ( $headers, $chars_read, $buffer, $char,
+        $current_header, $is_last_header, $peek_stdin );
+
+   open my $peek_stdin, '>&', \*STDIN or die "Can't dup STDIN! $!";
+
+   $is_last_header = 0;
+   $offset       //= 0;
+   $headers        = {};
+   $chars_read     = 0;
+
+   binmode $file_handle, ':unix:encoding(UTF-8)';
+   binmode $peek_stdin, ':unix:encoding(UTF-8)';
+
+   warn "going to try to get a header from file handle";
+
+   seek $file_handle, 0, 0;
+
+   # protect ourselves from DOS attacks based on huge messages
+   HEAD_READ: while ( $chars_read += read $file_handle, $char, 1 )
+   {
+      $offset += $chars_read;
+      $buffer .= $char;
+
+      {
+         use bytes;
+
+         if ( length $buffer > $MAX_HEADER_SIZE )
+         {
+            warn "503 Error: Sorry, that mail header is too big (@{[ length $buffer ]} bytes) ($buffer)\n";
+
+            print STDOUT "503 Error: Sorry, that mail header is too big\n";
+
+            no bytes;
+
+            last HEAD_READ and return;
+         }
+      }
+
+      warn "got CRLF" and next HEAD_READ if ( $buffer =~ /\r$/ ); # we hit a CRLF, skip the CR
+
+      if ( $buffer =~ /\n$/ )
+      {
+         chomp $buffer;
+
+         warn "hit a newline after $chars_read chars read. current header looks like ($buffer)";
+         warn "   ...and that buffer string is @{[ length $buffer ]} chars long";
+
+         # we're obviously at the end of the line for the header, but we need
+         # to determine if the next line is an empty newline as well.  That
+         # will tell us if we have read the final header
+
+         if ( $buffer =~ /^\r?\n?[[:alpha:]]-?[[:alnum:]-]+:/ )
+         {
+            # we're at the beginning of a new header
+
+            warn "we're at the beginning of a new header";
+
+            my ( $header_name, $header_value ) =
+               split /:[[:space:]]{0,}/, $buffer, 2;
+
+            $current_header = $header_name;
+
+            warn "current header is '$current_header'";
+
+            unless ( defined $header_value && length $header_value )
+            {
+               warn '!something did not split right!';
+
+               warn "504 Error: encountered malformed header ($header_name)\n";
+
+               say "504 Error: encountered malformed header";
+
+               return;
+            }
+
+            # each header is an array ref, because some headers can occur more
+            # than once (such as the "Received: blah blah" header), and in each
+            # header entry there can be multiple lines (multi-line headers), so
+            # each header entry is also an array ref of lines:
+
+            $headers->{ $current_header } //= [ [] ];
+
+            # this header we're dealing with is going to be at the bottom of
+            # the array ref for all headers of the same name, so it's index
+            # is going to be -1.  Since we know we are at the beginning of the
+            # new header entry, this first line of a potentially multi-line
+            # header is going to be at index 0.
+
+            push @{ $headers->{ $current_header }->[-1] }, $header_value;
+         }
+         elsif ( $buffer =~ /^\r?\n?[[:space:]]/ )
+         {
+            warn "In a multi-line header...($current_header)";
+
+            unless ( defined $current_header )
+            {
+               # if execution comes here, we came across data in the header
+               # space that was malformed
+
+               warn "504 Error: encountered malformed header ($buffer)\n";
+
+               say "504 Error: encountered malformed header";
+
+               return;
+            }
+
+            # we are in the middle of a multi-line header.  push this line
+            # onto the most recent occurance of the header of the same name
+            # which will be at index -1 in that array ref
+
+            push @{ $headers->{ $current_header }->[-1] }, $buffer;
+         }
+         else
+         {
+            warn "THIS ISN'T THE BEGINNING OF A NEW HEADER, NOR IS IT A MULTILINE.  SOMETHING IS EFFED UP";
+         }
+
+         # we're probably at the end of all the headers now, unless we've
+         # got an email with malformed headers.  We make sure we're at the
+         # last header by checking if the next character is the beginning
+         # of a CRLF windows line ending, or if it is a POSIX style newline
+
+         warn "peeking ahead at the next two chars in the file handle";
+
+         # look ahead 2 character (2 chars instead of 1 to accunt for CRLF)
+         my $peek_buffer = '';
+         my $peek_read   = 0;
+
+         seek $file_handle, 0, 0;
+
+         PEEK: while ( $peek_read = read $file_handle, $peek_buffer, 2, $chars_read )
+         {
+            last PEEK;
+         }
+
+         warn "peaked at $peek_read chars";
+
+         if ( $peek_buffer =~ /\r?\n/ )
+         {
+            warn 'Looks like we just saw the last header';
+
+            ++$chars_read;
+            ++$is_last_header;
+
+            # we're done reading headers.  Break out of the loop and return out
+            # of the class method
+
+            use Data::Dumper;
+            say Dumper $headers;
+
+            return $headers, $chars_read if $is_last_header;
+         }
+         else
+         {
+            warn "The two chars read ($peek_buffer) were not newlines.  This isn't the last header.";
+         }
+      } # end of header line condition
+   } # end of header read operation
+   # < execution will never reach this point
+}
+
+sub stash_headers
+{
+   my ( $self, $file_handle ) = @_;
+
+   warn "read_headers() is going to go get the mail headers...";
+
+   my ( $headers, $body_offset ) = $self->read_headers( $file_handle );
+
+   $c->stash( { body_offset => $body_offset, mail_headers => $headers } );
+}
+
+sub get_header
+{
+   my ( $self, $requested_header ) = @_;
+
+   my $headers = $c->stash->{mail_headers};
+
+   return unless exists $headers->{ $requested_header };
+
+   $requested_header = $headers->{ $requested_header };
+
+   return wantarray ? @${ $requested_header } : ${ $requested_header }[0];
 }
 
 sub preparemsg
@@ -237,6 +480,7 @@ my $smnserver = SpamMeNot::Server->new # XXX how can these options be improved?
    user              => 'nobody',
    group             => 'nogroup',
    log_file          => '/var/log/spammenot/server.log', # !! must be writable by "nobody"
+   commandline       => "sudo -E /home/superman/perl5/perlbrew/perls/perl-tommydev/bin/perl $0",
 ) or die "$! - $@";
 
 $smnserver->run();

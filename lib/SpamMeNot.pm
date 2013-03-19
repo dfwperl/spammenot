@@ -42,7 +42,6 @@ use Catalyst qw/
    ConfigLoader
    Static::Simple
    StackTrace
-   Unicode
 /;
 
 our $VERSION = '0.000001';
