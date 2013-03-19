@@ -47,14 +47,13 @@ $c = SpamMeNot->new();
 
 package SpamMeNot::Server;
 use parent qw( Net::Server::PreFork );
-use SpamMeNot::Common; # XXX will contain various definitions and defaults.
-                       # XXX what things could we take from here and put there?
+use SpamMeNot::Common; # contains various definitions and defaults.
 
 sub process_request
 {
    my $self = shift @_;
 
-   # XXX do you know what a UUID is?
+   # UUID per request
    $UUID = Data::UUID->new()->to_string( Data::UUID->new()->create() );
 
    $IP = $self->{server}{peeraddr} // '<unknown peer>';
@@ -186,9 +185,6 @@ sub process_request
 
          }
 
-         # XXX who can explain this regex?!
-         my ( $arg, $val ) = split /\s*?:\s*?(?=\S)/, $line, 2;
-
          $incoming_data->{ $arg } = $val;
 
          alarm $TIMEOUT;
@@ -252,9 +248,7 @@ sub read_headers
    my ( $self, $file_handle, $offset ) = @_;
 
    my ( $headers, $chars_read, $buffer, $char,
-        $current_header, $is_last_header, $peek_stdin );
-
-   open my $peek_stdin, '>&', \*STDIN or die "Can't dup STDIN! $!";
+        $current_header, $is_last_header );
 
    $is_last_header = 0;
    $offset       //= 0;
@@ -262,7 +256,6 @@ sub read_headers
    $chars_read     = 0;
 
    binmode $file_handle, ':unix:encoding(UTF-8)';
-   binmode $peek_stdin, ':unix:encoding(UTF-8)';
 
    warn "going to try to get a header from file handle";
 
@@ -291,6 +284,12 @@ sub read_headers
 
       warn "got CRLF" and next HEAD_READ if ( $buffer =~ /\r$/ ); # we hit a CRLF, skip the CR
 
+      if ( $buffer eq "\n" )
+      {
+         warn 'Looks like we just saw the last header'
+            and return $headers, $chars_read;
+      }
+
       if ( $buffer =~ /\n$/ )
       {
          chomp $buffer;
@@ -302,7 +301,7 @@ sub read_headers
          # to determine if the next line is an empty newline as well.  That
          # will tell us if we have read the final header
 
-         if ( $buffer =~ /^\r?\n?[[:alpha:]]-?[[:alnum:]-]+:/ )
+         if ( $buffer =~ /^[[:alpha:]]+-?[[:alnum:]-]+:/ )
          {
             # we're at the beginning of a new header
 
@@ -341,7 +340,7 @@ sub read_headers
 
             push @{ $headers->{ $current_header }->[-1] }, $header_value;
          }
-         elsif ( $buffer =~ /^\r?\n?[[:space:]]/ )
+         elsif ( $buffer =~ /^[[:space:]]+/ )
          {
             warn "In a multi-line header...($current_header)";
 
@@ -368,45 +367,8 @@ sub read_headers
             warn "THIS ISN'T THE BEGINNING OF A NEW HEADER, NOR IS IT A MULTILINE.  SOMETHING IS EFFED UP";
          }
 
-         # we're probably at the end of all the headers now, unless we've
-         # got an email with malformed headers.  We make sure we're at the
-         # last header by checking if the next character is the beginning
-         # of a CRLF windows line ending, or if it is a POSIX style newline
+         undef $buffer; # clear the line buffer
 
-         warn "peeking ahead at the next two chars in the file handle";
-
-         # look ahead 2 character (2 chars instead of 1 to accunt for CRLF)
-         my $peek_buffer = '';
-         my $peek_read   = 0;
-
-         seek $file_handle, 0, 0;
-
-         PEEK: while ( $peek_read = read $file_handle, $peek_buffer, 2, $chars_read )
-         {
-            last PEEK;
-         }
-
-         warn "peaked at $peek_read chars";
-
-         if ( $peek_buffer =~ /\r?\n/ )
-         {
-            warn 'Looks like we just saw the last header';
-
-            ++$chars_read;
-            ++$is_last_header;
-
-            # we're done reading headers.  Break out of the loop and return out
-            # of the class method
-
-            use Data::Dumper;
-            say Dumper $headers;
-
-            return $headers, $chars_read if $is_last_header;
-         }
-         else
-         {
-            warn "The two chars read ($peek_buffer) were not newlines.  This isn't the last header.";
-         }
       } # end of header line condition
    } # end of header read operation
    # < execution will never reach this point
@@ -419,6 +381,9 @@ sub stash_headers
    warn "read_headers() is going to go get the mail headers...";
 
    my ( $headers, $body_offset ) = $self->read_headers( $file_handle );
+
+   use Data::Dumper;
+   say Dumper $headers;
 
    $c->stash( { body_offset => $body_offset, mail_headers => $headers } );
 }
