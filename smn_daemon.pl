@@ -1,4 +1,4 @@
-#!/home/superman/perl5/perlbrew/perls/perl-tommydev/bin/perl
+#!/usr/bin/env perl
 
 use strict;
 use warnings;
@@ -37,11 +37,10 @@ package SpamMeNot::Server;
 
 use parent qw( Net::Server::PreFork );
 
-use Data::UUID;
-use SpamMeNot::Common; # contains various definitions and defaults
 use SpamMeNot::Daemon; # all the methods (routines) used by this server
 
-my $daemon = SpamMeNot::Daemon->new();
+my $daemon  = SpamMeNot::Daemon->new();
+my $timeout = $daemon->config->{timeout};
 
 sub process_request
 {
@@ -53,17 +52,17 @@ sub process_request
    {
       local $SIG{ALRM} = sub { die "Timed Out!\n" };
 
-      my $previous_alarm = alarm $TIMEOUT;
+      my $previous_alarm = alarm $timeout;
 
       SMTP_CONVERSATION: while ( my $line = $daemon->safe_readline() )
       {
-         push @{ $daemon->c->session->{conversation} }, $line;
+         push @{ $daemon->session->{conversation} }, $line;
 
          last SMTP_CONVERSATION if $daemon->end_of_message();
 
          $daemon->converse( $line );
 
-         alarm $TIMEOUT;
+         alarm $timeout;
 
       } # end of SMTP_CONVERSATION
 
@@ -72,7 +71,7 @@ sub process_request
 
    $daemon->shutdown_session();
 
-   print STDOUT "Timed Out after $TIMEOUT seconds."
+   print STDOUT "Timed Out after $timeout seconds."
       and return
          if $@ =~ /timed out/i;
 }

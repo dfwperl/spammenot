@@ -1,5 +1,24 @@
 #!/usr/bin/env perl
 
+BEGIN
+{
+   use POSIX;
+
+   # give up root identity and run as nobody:nogroup ASAP
+   my ( $uid, $gid ) = ( getpwnam('nobody') )[2,3];
+
+   if ( $> == 0 )
+   {
+      POSIX::setgid( $gid ); # GID must be set before UID!
+      POSIX::setuid( $uid );
+   }
+   elsif ( $> != $uid )
+   {
+      warn "ABORT!\n";
+      die qq{$0 only runs as system user "nobody", not as user with UID "$>"\n};
+   }
+}
+
 use Catalyst::ScriptRunner;
 Catalyst::ScriptRunner->run('SpamMeNot', 'FastCGI');
 

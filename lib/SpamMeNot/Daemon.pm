@@ -8,32 +8,67 @@ use utf8;
 
 our $VERSION = '0.000001';
 
-use HTTP::Request;
+use Data::UUID;
+use LWP::UserAgent;
 
 use lib 'lib';
 
-use SpamMeNot;
 use SpamMeNot::Common;
 
 
 sub new
 {
-   my $self = bless {}, shift @_;
-
-   # instantiate the SpamMeNot application which is also a catalyst object
-   $self->{c} = SpamMeNot->new();
-
+   my $self  = bless {}, shift @_;
    my $stdin = \*STDIN;
+
+   $self->{config}  = {};
+   $self->{session} = {};
 
    binmode $stdin, ':unix:encoding(UTF-8)';
 
-   $self->c->stash( stdin => $stdin );
+   $self->session( stdin => $stdin );
+   $self->config( timeout => $TIMEOUT );
 
    return $self;
 }
 
 
-sub c { shift->{c} }
+sub config
+{
+   my ( $self, $name, $val ) = @_;
+
+   return $self->{config} unless defined $name;
+
+   if ( ref $name && ref $name eq 'HASH' )
+   {
+      @{ $self->{config} }{ keys %$name } = values %$name;
+   }
+   else
+   {
+      $self->{config}->{ $name } = $val
+   }
+
+   return $self;
+}
+
+
+sub session
+{
+   my ( $self, $name, $val ) = @_;
+
+   return $self->{session} unless defined $name;
+
+   if ( ref $name && ref $name eq 'HASH' )
+   {
+      @{ $self->{session} }{ keys %$name } = values %$name;
+   }
+   else
+   {
+      $self->{session}->{ $name } = $val
+   }
+
+   return $self;
+}
 
 
 sub setup_session
@@ -64,12 +99,12 @@ sub setup_session
    # ... incude the $UUID, the $IP, and a timestamp
    $self->log_incoming_request( $uuid, $ip, scalar gmtime );
 
-   $self->c->delete_session( 'making room for next session - clean slate' );
-
-   $self->c->session( {
+   $self->session( {
       uuid  => $uuid,
       peer  => $ip,
    } );
+
+   return $self;
 }
 
 
@@ -79,7 +114,10 @@ sub shutdown_session
 
    warn 'Session is over.  Everybody go home';
 
-   $self->c->delete_session();
+   $self->{session} = {};
+   $self->{config}  = {};
+
+   return $self;
 }
 
 
@@ -102,7 +140,7 @@ sub safe_readline
 
    my ( $chars_read, $buffer, $utf8_char );
 
-   SAFE_READ: while ( $chars_read += read $self->c->stash->{stdin}, $utf8_char, 1 )
+   SAFE_READ: while ( $chars_read += read $self->session->{stdin}, $utf8_char, 1 )
    {
       $buffer .= $utf8_char;
 
@@ -122,10 +160,9 @@ sub converse
 {
    my $self = shift @_;
 
-   my $params = [ LINE => shift @{ $self->c->stash->{conversation} } ];
+   my $params = [ LINE => shift @{ $self->config->{conversation} } ];
 
-   use Data::Dumper;
-   say Dumper $self->sendmsg( '/' => $params )
+   say $self->sendmsg( 'http' => '/' => $params )
 }
 
 
@@ -136,39 +173,6 @@ sub end_of_message
    $self->{dummy_value}++;
 
    return $self->{dummy_value} > 1;
-}
-
-
-sub stash_content
-{
-   my ( $self, $file_handle ) = shift @_;
-
-   my ( $chars_read, $buffer, $content ) = ( 0, '', '' );
-
-   my $offset = $self->c->stash->{body_offset};
-
-   die "Bad call to stash_content() -- need filehandle seek position\n"
-      unless $offset;
-
-   seek $file_handle, $offset, 0;
-
-   # protect ourselves from DOS attacks based on huge messages
-   $chars_read = read $file_handle, $buffer, $MAX_MESSAGE_SIZE;
-
-   if ( $chars_read = read $file_handle, $buffer, 1 )
-   {
-      undef $content;
-
-      warn "503 Error: Sorry, that mail message is too big\n";
-
-      print STDOUT "503 Error: Sorry, that mail message is too big\n";
-
-      return;
-   }
-
-   $self->c->stash( mail_content => $content );
-
-   return 1;
 }
 
 # XXX this is largely unused right now; it was a proof-of-concept that is
@@ -323,13 +327,17 @@ sub get_header
 
 sub sendmsg
 {
-   my ( $self, $request_uri, $params ) = @_;
+   my ( $self, $scheme, $path, $params ) = @_;
 
-   my $response;
-   my $request = HTTP::Request->new( GET => $request_uri, $params );
-   my $status  = $self->c->handle_request( $request, \$response );
+   my $uri = sprintf '%s://%s:%d/%s',
+      $scheme,
+      $APP_SERVER_HOST,
+      $APP_SERVER_PORT,
+      $path;
 
-   return $response;
+   my $response = LWP::UserAgent->new->post( $uri, $params );
+
+   return $response->content;
 }
 
 1;
