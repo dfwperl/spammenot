@@ -1,11 +1,20 @@
+<<<<<<< HEAD
 #!/usr/bin/perl
+=======
+#!/home/superman/perl5/perlbrew/perls/perl-tommydev/bin/perl
+>>>>>>> master
 
 use strict;
 use warnings;
 
 use 5.017; # minimum supported version of Perl is 5.17
 
+<<<<<<< HEAD
 use encoding 'utf8';
+=======
+#use encoding 'utf8';
+use utf8;
+>>>>>>> master
 
 BEGIN
 {
@@ -27,7 +36,12 @@ BEGIN
 }
 
 # no buffering, and shut up catalyst
+<<<<<<< HEAD
 BEGIN { ++$|; select STDIN; ++$|; select STDOUT; $SIG{__DIE__} = sub { print '' } }
+=======
+BEGIN { select STDIN; ++$|; select STDOUT; $|++; $SIG{__DIE__} = sub { warn "Died.\n"; warn @_ } }
+#BEGIN { ++$|; select STDIN; ++$|; select STDOUT; }
+>>>>>>> master
 
 use HTTP::Request;
 use Data::UUID;
@@ -45,14 +59,13 @@ $c = SpamMeNot->new();
 
 package SpamMeNot::Server;
 use parent qw( Net::Server::PreFork );
-use SpamMeNot::Common; # XXX will contain various definitions and defaults.
-                       # XXX what things could we take from here and put there?
+use SpamMeNot::Common; # contains various definitions and defaults.
 
 sub process_request
 {
    my $self = shift @_;
 
-   # XXX do you know what a UUID is?
+   # UUID per request
    $UUID = Data::UUID->new()->to_string( Data::UUID->new()->create() );
 
    $IP = $self->{server}{peeraddr} // '<unknown peer>';
@@ -80,6 +93,7 @@ sub process_request
 
       $self->stash_headers( \*STDIN );
 
+<<<<<<< HEAD
       use Data::Dumper;
       warn 'DUMPERING!!!';
 
@@ -87,6 +101,12 @@ sub process_request
 
       my $incoming_data  = {}; # dummy variable XXX
 
+=======
+#      $self->stash_content( \*STDIN );
+
+      my $incoming_data  = {}; # dummy variable XXX
+
+>>>>>>> master
       MAINLOOP: for my $line ( split /\r|\n/, '' )
       {
          # check for input
@@ -187,9 +207,6 @@ sub process_request
 
          }
 
-         # XXX who can explain this regex?!
-         my ( $arg, $val ) = split /\s*?:\s*?(?=\S)/, $line, 2;
-
          $incoming_data->{ $arg } = $val;
 
          alarm $TIMEOUT;
@@ -210,16 +227,28 @@ sub process_request
 
 sub stash_content
 {
+<<<<<<< HEAD
    my ( $file_handle ) = @_;
 
    my ( $chars_read, $buffer, $content ) = ( 0, '', '' );
 
    my $offset = $c->stash( 'body_offset' );
+=======
+   my ( $file_handle ) = shift @_;
+
+   my ( $chars_read, $buffer, $content ) = ( 0, '', '' );
+
+   my $offset = $c->stash->{body_offset};
+>>>>>>> master
 
    die "Bad call to stash_content() -- need filehandle seek position\n"
       unless $offset;
 
    binmode $file_handle, ':unix:encoding(UTF-8)';
+<<<<<<< HEAD
+=======
+#   binmode $file_handle;
+>>>>>>> master
 
    seek $file_handle, $offset, 0;
 
@@ -247,6 +276,7 @@ sub stash_content
 
 sub read_headers
 {
+<<<<<<< HEAD
    warn 'read_header() called';
 
    my ( $self, $file_handle, $offset ) = @_;
@@ -255,6 +285,18 @@ sub read_headers
 
    $is_last_header = 0;
    $offset       //= 0;
+=======
+   warn 'read_headers() called';
+
+   my ( $self, $file_handle, $offset ) = @_;
+
+   my ( $headers, $chars_read, $buffer, $char,
+        $current_header, $is_last_header );
+
+   $is_last_header = 0;
+   $offset       //= 0;
+   $headers        = {};
+>>>>>>> master
    $chars_read     = 0;
 
    binmode $file_handle, ':unix:encoding(UTF-8)';
@@ -264,9 +306,16 @@ sub read_headers
    seek $file_handle, 0, 0;
 
    # protect ourselves from DOS attacks based on huge messages
+<<<<<<< HEAD
    HEAD_READ: while ( $chars_read += read $file_handle, $buffer, 1, $offset )
    {
       $offset += $chars_read;
+=======
+   HEAD_READ: while ( $chars_read += read $file_handle, $char, 1 )
+   {
+      $offset += $chars_read;
+      $buffer .= $char;
+>>>>>>> master
 
       {
          use bytes;
@@ -285,14 +334,30 @@ sub read_headers
 
       warn "got CRLF" and next HEAD_READ if ( $buffer =~ /\r$/ ); # we hit a CRLF, skip the CR
 
+<<<<<<< HEAD
       if ( $buffer =~ /\n$/ )
       {
          warn "hit a newline after $chars_read chars read. current header looks like ($buffer)";
+=======
+      if ( $buffer eq "\n" )
+      {
+         warn 'Looks like we just saw the last header'
+            and return $headers, $chars_read;
+      }
+
+      if ( $buffer =~ /\n$/ )
+      {
+         chomp $buffer;
+
+         warn "hit a newline after $chars_read chars read. current header looks like ($buffer)";
+         warn "   ...and that buffer string is @{[ length $buffer ]} chars long";
+>>>>>>> master
 
          # we're obviously at the end of the line for the header, but we need
          # to determine if the next line is an empty newline as well.  That
          # will tell us if we have read the final header
 
+<<<<<<< HEAD
          chomp $buffer;
 
          warn "peeking ahead at the next two chars in the file handle";
@@ -369,6 +434,93 @@ sub stash_headers
 
    $c->stash( body_offset  => $body_offset );
    $c->stash( mail_headers => $headers );
+=======
+         if ( $buffer =~ /^[[:alpha:]]+-?[[:alnum:]-]+:/ )
+         {
+            # we're at the beginning of a new header
+
+            warn "we're at the beginning of a new header";
+
+            my ( $header_name, $header_value ) =
+               split /:[[:space:]]{0,}/, $buffer, 2;
+
+            $current_header = $header_name;
+
+            warn "current header is '$current_header'";
+
+            unless ( defined $header_value && length $header_value )
+            {
+               warn '!something did not split right!';
+
+               warn "504 Error: encountered malformed header ($header_name)\n";
+
+               say "504 Error: encountered malformed header";
+
+               return;
+            }
+
+            # each header is an array ref, because some headers can occur more
+            # than once (such as the "Received: blah blah" header), and in each
+            # header entry there can be multiple lines (multi-line headers), so
+            # each header entry is also an array ref of lines:
+
+            $headers->{ $current_header } //= [ [] ];
+
+            # this header we're dealing with is going to be at the bottom of
+            # the array ref for all headers of the same name, so it's index
+            # is going to be -1.  Since we know we are at the beginning of the
+            # new header entry, this first line of a potentially multi-line
+            # header is going to be at index 0.
+
+            push @{ $headers->{ $current_header }->[-1] }, $header_value;
+         }
+         elsif ( $buffer =~ /^[[:space:]]+/ )
+         {
+            warn "In a multi-line header...($current_header)";
+
+            unless ( defined $current_header )
+            {
+               # if execution comes here, we came across data in the header
+               # space that was malformed
+
+               warn "504 Error: encountered malformed header ($buffer)\n";
+
+               say "504 Error: encountered malformed header";
+
+               return;
+            }
+
+            # we are in the middle of a multi-line header.  push this line
+            # onto the most recent occurance of the header of the same name
+            # which will be at index -1 in that array ref
+
+            push @{ $headers->{ $current_header }->[-1] }, $buffer;
+         }
+         else
+         {
+            warn "THIS ISN'T THE BEGINNING OF A NEW HEADER, NOR IS IT A MULTILINE.  SOMETHING IS EFFED UP";
+         }
+
+         undef $buffer; # clear the line buffer
+
+      } # end of header line condition
+   } # end of header read operation
+   # < execution will never reach this point
+}
+
+sub stash_headers
+{
+   my ( $self, $file_handle ) = @_;
+
+   warn "read_headers() is going to go get the mail headers...";
+
+   my ( $headers, $body_offset ) = $self->read_headers( $file_handle );
+
+   use Data::Dumper;
+   say Dumper $headers;
+
+   $c->stash( { body_offset => $body_offset, mail_headers => $headers } );
+>>>>>>> master
 }
 
 sub get_header
@@ -428,6 +580,7 @@ my $smnserver = SpamMeNot::Server->new # XXX how can these options be improved?
    user              => 'nobody',
    group             => 'nogroup',
    log_file          => '/var/log/spammenot/server.log', # !! must be writable by "nobody"
+   commandline       => "sudo -E /home/superman/perl5/perlbrew/perls/perl-tommydev/bin/perl $0",
 ) or die "$! - $@";
 
 $smnserver->run();
