@@ -14,14 +14,10 @@ BEGIN
    $ENV{CATALYST_ENGINE} = 'Embeddable';
 
    require Catalyst::Engine::Embeddable;
-}
 
-BEGIN
-{
    # DEBUGGING and STDERR
 
    $ENV{CATALYST_DEBUG} ||= $ENV{DEBUG};
-
    $ENV{DBIC_TRACE}     ||= $ENV{DEBUG_SQL};
 
    open my $err, '>>/var/log/spammenot/app.log'
@@ -40,8 +36,10 @@ BEGIN
 
 use Catalyst qw/
    ConfigLoader
-   Static::Simple
    StackTrace
+   Session
+   Session::Store::FastMmap
+   Session::State::Stash
 /;
 
 our $VERSION = '0.000001';
