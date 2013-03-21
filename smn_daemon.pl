@@ -10,8 +10,10 @@ BEGIN
 {
    use POSIX;
 
-   # give up root identity and run as nobody:nogroup ASAP
-   my ( $uid, $gid ) = ( getpwnam('nobody') )[2,3];
+   # give up root identity and run as spammenot:spammenot ASAP
+   my ( $uid, $gid ) = ( getpwnam('spammenot') )[2,3];
+
+   die $! unless $uid && $gid;
 
    if ( $> == 0 )
    {
@@ -21,7 +23,7 @@ BEGIN
    elsif ( $> != $uid )
    {
       warn "ABORT!\n";
-      die qq{$0 only runs as system user "nobody", not as user with UID "$>"\n};
+      die qq{$0 only runs as "spammenot", not as user with UID "$>"\n};
    }
 
    select STDERR; $|++;
@@ -90,11 +92,10 @@ my $smnserver = SpamMeNot::Server->new # XXX how can these options be improved?
    max_spare_servers => 100,
    max_servers       => 400,
    max_requests      => 15,
-   user              => 'nobody',
-   group             => 'nogroup',
-   log_file          => '/var/log/spammenot/server.log', # !! must be writable by "nobody"
-   commandline       => "sudo -E /home/superman/perl5/perlbrew/perls/perl-tommydev/bin/perl $0",
-) or die "$! - $@";
+   user              => 'spammenot',
+   group             => 'spammenot',
+   log_file          => '/var/log/spammenot/server.log',
+) or die "$! - $@";     # log file (above) must be writable by "spammenot" !!
 
 $smnserver->run();
 

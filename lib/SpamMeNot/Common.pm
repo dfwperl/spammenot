@@ -32,7 +32,7 @@ $MAX_HEADER_LENGTH = 1000;     # max length (in chars*) for any given header
 $MAX_MESSAGE_SIZE  = 52428800; # max size for a message - 50 megabytes
 $MAX_SAFE_READLINE = 1000;     # max length (in chars*) for a "safe" line read
 $APP_SERVER_HOST   = 'localhost';
-$APP_SERVER_PORT   = 252525;
+$APP_SERVER_PORT   = 25252;
 
 # *chars - as in "UTF-8" encoded characters, not fixed length ascii chars
 

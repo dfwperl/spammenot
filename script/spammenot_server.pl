@@ -1,5 +1,26 @@
 #!/usr/bin/env perl
 
+BEGIN
+{
+   use POSIX;
+
+   # give up root identity and run as nobody:nogroup ASAP
+   my ( $uid, $gid ) = ( getpwnam('spammenot') )[2,3];
+
+   die $! unless $uid && $gid;
+
+   if ( $> == 0 )
+   {
+      POSIX::setgid( $gid ); # GID must be set before UID!
+      POSIX::setuid( $uid );
+   }
+   elsif ( $> != $uid )
+   {
+      warn "ABORT!\n";
+      die qq{$0 only runs as "spammenot", not as user with UID "$>"\n};
+   }
+}
+
 BEGIN {
     $ENV{CATALYST_SCRIPT_GEN} = 40;
 }

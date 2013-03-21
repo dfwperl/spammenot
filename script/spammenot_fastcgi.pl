@@ -5,7 +5,9 @@ BEGIN
    use POSIX;
 
    # give up root identity and run as nobody:nogroup ASAP
-   my ( $uid, $gid ) = ( getpwnam('nobody') )[2,3];
+   my ( $uid, $gid ) = ( getpwnam('spammenot') )[2,3];
+
+   die $! unless $uid && $gid;
 
    if ( $> == 0 )
    {
@@ -15,7 +17,7 @@ BEGIN
    elsif ( $> != $uid )
    {
       warn "ABORT!\n";
-      die qq{$0 only runs as system user "nobody", not as user with UID "$>"\n};
+      die qq{$0 only runs as "spammenot", not as user with UID "$>"\n};
    }
 }
 

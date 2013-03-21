@@ -32,7 +32,8 @@ sub index :Path :Args(0) {
     # Hello World
     #$c->response->body( $c->welcome_message );
     use Data::Dumper;
-    $c->response->body( Dumper $c->stash );
+    $c->response->header( 'Content-type' => 'text/plain; charset=utf-8' );
+    $c->response->body( Dumper $c->request->params );
 }
 
 =head2 default
