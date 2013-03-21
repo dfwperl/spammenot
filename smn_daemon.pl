@@ -3,85 +3,80 @@
 use strict;
 use warnings;
 
-use 5.014; # minimum supported version of Perl is 5.14
-use utf8;
+use 5.014; # minimum supported version of Perl is 5.14 (solid unicode support)
+use utf8;  # otherwise regexes on utf8-encode strings completely fail
 
 BEGIN
 {
-   use POSIX;
+   STDIN->autoflush;  # not suffering
+   STDOUT->autoflush; # with
+   STDERR->autoflush; # buffering
 
-   # give up root identity and run as spammenot:spammenot ASAP
-   my ( $uid, $gid ) = ( getpwnam('spammenot') )[2,3];
-
-   die $! unless $uid && $gid;
-
-   if ( $> == 0 )
-   {
-      POSIX::setgid( $gid ); # GID must be set before UID!
-      POSIX::setuid( $uid );
-   }
-   elsif ( $> != $uid )
-   {
-      warn "ABORT!\n";
-      die qq{$0 only runs as "spammenot", not as user with UID "$>"\n};
-   }
-
-   select STDERR; $|++;
-   select STDIN;  $|++;
-   select STDOUT; $|++;
-
+   # gracefully? deals with an anomaly in the Net::Server::PreFork module
    $SIG{__DIE__} = sub { print STDERR 'Died: '; warn @_ };
 }
 
-use lib 'lib';
+use lib 'lib'; # all our modules live in $APPROOT/lib/
+
+use SpamMeNot::DropPerms; # abandon root privileges immediately
+use SpamMeNot::Daemon;    # all the methods (routines) used by this daemon
 
 package SpamMeNot::Server;
 
 use parent qw( Net::Server::PreFork );
 
-use SpamMeNot::Daemon; # all the methods (routines) used by this server
+# Do not be confused: the $daemon (below) is not the same as the catalyst
+# backend application.  The daemon is created, configured, and launched below.
+# It makes calls to the catalyst backend from within the SpamMeNot::Daemon
+# module The purpose of the daemon is to be highly-available and route requests
+# to the intelligent catalyst application which contains all the logic.
 
 my $daemon  = SpamMeNot::Daemon->new();
-my $timeout = $daemon->config->{timeout};
+my $timeout = $daemon->_config->{timeout};
 
 sub process_request
 {
    my $self = shift @_;
 
-   $daemon->setup_session();
+   $daemon->setup_session( $self );
 
    eval # eval lets us trap alarms and thereby handle timeouts
    {
-      local $SIG{ALRM} = sub { die "Timed Out!\n" };
+      local $SIG{ALRM} = sub { die "503 Error: Timed Out!\n" };
 
       my $previous_alarm = alarm $timeout;
 
-      SMTP_CONVERSATION: while ( my $line = $daemon->safe_readline() )
+      while ( my $line = $daemon->safe_readline() )
       {
-         push @{ $daemon->session->{conversation} }, $line;
+         if ( $daemon->converse( $line ) )
+         {
+            say $daemon->response;
+         }
+         else
+         {
+            say $daemon->error;
 
-         last SMTP_CONVERSATION if $daemon->end_of_message();
+            return;
+         }
 
-         $daemon->converse( $line );
+         last if $daemon->end_of_message;
 
          alarm $timeout;
-
-      } # end of SMTP_CONVERSATION
+      }
 
       alarm $previous_alarm;
    };
 
    $daemon->shutdown_session();
 
-   print STDOUT "Timed Out after $timeout seconds."
-      and return
-         if $@ =~ /timed out/i;
+   say "Timed Out after $timeout seconds." and return if $@ =~ /Timed out/;
 }
 
 package main;
 
 warn "I'm starting a server daemon in debug mode\n" if $ENV{DEBUG};
 
+# warning: the log file used below must be writable by the designated user
 my $smnserver = SpamMeNot::Server->new # XXX how can these options be improved?
 (
    background        => 0,
@@ -94,8 +89,9 @@ my $smnserver = SpamMeNot::Server->new # XXX how can these options be improved?
    max_requests      => 15,
    user              => 'spammenot',
    group             => 'spammenot',
+   commandline       => $0,
    log_file          => '/var/log/spammenot/server.log',
-) or die "$! - $@";     # log file (above) must be writable by "spammenot" !!
+) or die "$! - $@";
 
 $smnserver->run();
 

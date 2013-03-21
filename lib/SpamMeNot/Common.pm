@@ -23,7 +23,7 @@ our @EXPORT  = qw(
 
 @SUPPORTED_COMMANDS = qw/
    HELO     EHLO     AUTH     RSET     NOOP     HELP
-   MAIL     RCPT     DATA     VRFY     QUIT     DFWPM
+   MAIL     RCPT     DATA     VRFY     QUIT     MOO
 /;
 
 $TIMEOUT           = 120;      # RFCs say 2 minutes

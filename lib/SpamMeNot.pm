@@ -14,19 +14,17 @@ BEGIN
    $ENV{CATALYST_DEBUG} ||= $ENV{DEBUG};
    $ENV{DBIC_TRACE}     ||= $ENV{DEBUG_SQL};
 
-   open my $err, '>>/var/log/spammenot/app.log'
-      or die qq{Can't log SpamMeNot Catalyst STDERR! $!};
+   open my $err, '>>', '/var/log/spammenot/app.log'
+      or die "Can't log SpamMeNot Catalyst errors! $!";
 
    open STDERR, '>&', $err;
 }
 
 # Set flags and add plugins for the application
-#
-#         -Debug: activates the debug mode for very useful log messages
-#   ConfigLoader: will load the configuration from a Config::General file in the
-#                 application's home directory
+#   - Documentation for these plugins can be found on metacpan.org
 
 use Catalyst qw/
+   Unicode
    ConfigLoader
    StackTrace
    Session
@@ -42,11 +40,10 @@ extends 'Catalyst';
 
 __PACKAGE__->config
 (
-   name => 'SpamMeNot',
+   name         => 'SpamMeNot',
    default_view => 'TXT',
    alerts_to    => 'SpamMeNot Alerts <internal.server.alerts@spammenot.com>',
    disable_component_resolution_regex_fallback => 1,
-   enable_catalyst_header => 0, # Send X-Catalyst header
 );
 
 # Start the application
