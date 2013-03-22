@@ -166,6 +166,11 @@ sub converse
 {
    my ( $self, $input ) = @_;
 
+   push @{ $self->_session->{conversation} }, $input;
+
+   return $self->too_much_chatter
+      if @{ $self->_session->{conversation} } > $MAX_CONVERSATION;
+
    my ( $smtp_command, $smtp_arg ) = split / /, $input, 2;
 
    $smtp_command = lc $smtp_command;
@@ -183,9 +188,10 @@ sub converse
       last_command => $self->_session->{last_command},
       uuid         => $self->_session->{uuid},
       peer         => $self->_session->{peer},
+      conversation => $self->_session->{conversation},
    };
 
-   my $response = $self->sendmsg( http => $smtp_command => $params );
+   my $response = $self->send_message( http => $smtp_command => $params );
 
    $self->_session(
       {
@@ -199,8 +205,51 @@ sub converse
    return;
 }
 
+sub write_message_data
+{
+   my $self = shift @_;
 
-sub sendmsg
+   my $params =
+   {
+      uuid         => $self->_session->{uuid},
+      peer         => $self->_session->{peer},
+      write_secret => $self->_session->{write_secret},
+      conversation => $self->_session->{conversation},
+      last_command => $self->_session->{last_command},
+   };
+
+   while ( my $line = $self->safe_readline() )
+   {
+      $params->{input} = $line;
+
+      my $response = $self->send_message( http => '/_write_data' => $params );
+
+      unless ( $response )
+      {
+         $self->_session->{error} = '503 Error: internal problem';
+
+         return;
+      }
+
+      $self->_session->{end_of_message}++ if $response eq 'end_of_message';
+
+      return 1;
+   }
+}
+
+
+sub too_much_chatter
+{
+   my $self = shift @_;
+
+   $self->_session->{error} =
+      '503 Error: too much chatter, just send the damn data OK?';
+
+   return;
+}
+
+
+sub send_message
 {
    my ( $self, $scheme, $path, $params ) = @_;
 
@@ -216,6 +265,9 @@ sub sendmsg
 
    $self->_session->{error} = $response->status_line;
 
+   $self->_session->{write_secret} = $response->header( 'X-write-secret' )
+      if $path eq 'data';
+
    return;
 }
 
@@ -229,6 +281,12 @@ sub end_of_message
 
 
 sub response { shift->_session->{response} }
+
+
+sub ready_for_data
+{
+   shift->_session->{conversation}->[-1] =~ /$READY_FOR_DATA/
+}
 
 
 sub error { shift->_session->{error} }

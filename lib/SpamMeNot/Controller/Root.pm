@@ -30,17 +30,31 @@ The root page (/)
 
 sub index :Path :Args(0)
 {
-    my ( $self, $c ) = @_;
+   my ( $self, $c ) = @_;
 
-    $c->detach( 'default' );
+   $c->detach( 'default' );
 }
 
 sub begin :Private
 {
-    my ( $self, $c ) = @_;
+   my ( $self, $c ) = @_;
 
-    $c->response->header( 'Content-type' => 'text/plain; charset=utf-8' );
- }
+   # we always respond with UTF-8 text
+   $c->response->header( 'Content-type' => 'text/plain; charset=utf-8' );
+
+   # after client sent data, they are only allowed to quit
+   if
+   (
+      $c->session->{called_data} &&
+      (
+         $c->request->path ne 'quit'       &&
+         $c->request->path ne '_write_data'
+      )
+   )
+   {
+      $c->detach( 'error' => 'You already sent your DATA.  Bugger off.' );
+   }
+}
 
 =head1 SUPPORTED COMMANDS
 
@@ -125,9 +139,13 @@ sub data :Local
 {
    my ( $self, $c ) = @_;
 
-   my $input = $c->request->param( 'input' );
+   $c->session( called_data => 1 );
 
-   $c->response->body( 'DATA => ' . Dumper $c->request->params );
+   $c->session( write_secret => int rand gmtime );
+
+   $c->response->header( 'X-write-secret' => $c->session->{write_secret} );
+
+   $c->response->body( '354 Send message content; end with <CRLF>.<CRLF>' );
 }
 
 sub vrfy :Local
@@ -139,24 +157,40 @@ sub vrfy :Local
    $c->response->body( 'VRFY => ' . Dumper $c->request->params );
 }
 
-sub quit :Local
-{
-   my ( $self, $c ) = @_;
-
-   my $input = $c->request->param( 'input' );
-
-   $c->response->body( '221 Bye' );
-}
-
 sub moo :Local
 {
    my ( $self, $c ) = @_;
 
-   my $input = $c->request->param( 'input' );
-
    $c->response->body( 'These are not the droids you\'re looking for.' );
 }
 
+sub quit :Local
+{
+   my ( $self, $c ) = @_;
+
+   $c->delete_session();
+
+   $c->response->body( '221 Bye' );
+}
+
+sub error :Private
+{
+   my ( $self, $c, $error_message ) = @_;
+
+   if ( $error_message )
+   {
+      $c->response->body( $error_message );
+   }
+   else
+   {
+      $c->response->body( '503 Error: Something went wrong' );
+   }
+
+   $c->response->status( 503 );
+
+   $c->delete_session();
+
+}
 
 =head2 default
 
@@ -166,11 +200,13 @@ Standard 404 error page
 
 sub default :Path
 {
-    my ( $self, $c ) = @_;
+   my ( $self, $c ) = @_;
 
-    $c->response->body( '503 Error: command not recognized' );
+   $c->response->body( '503 Error: command not recognized' );
 
-    $c->response->status( 503 );
+   $c->response->status( 503 );
+
+   $c->delete_session();
 }
 
 =head2 end

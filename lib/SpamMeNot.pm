@@ -42,7 +42,6 @@ __PACKAGE__->config
 (
    name         => 'SpamMeNot',
    default_view => 'TXT',
-   alerts_to    => 'SpamMeNot Alerts <internal.server.alerts@spammenot.com>',
    disable_component_resolution_regex_fallback => 1,
 );
 

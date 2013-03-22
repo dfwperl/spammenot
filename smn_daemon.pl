@@ -51,15 +51,17 @@ sub process_request
          if ( $daemon->converse( $line ) )
          {
             say $daemon->response;
+
+            if ( $daemon->ready_for_data )
+            {
+               say $daemon->error and return
+                  unless $daemon->write_message_data();
+            }
          }
          else
          {
-            say $daemon->error;
-
-            return;
+            say $daemon->error and return;
          }
-
-         last if $daemon->end_of_message;
 
          alarm $timeout;
       }
