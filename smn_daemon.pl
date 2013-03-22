@@ -32,18 +32,23 @@ use parent qw( Net::Server::PreFork );
 # module The purpose of the daemon is to be highly-available and route requests
 # to the intelligent catalyst application which contains all the logic.
 
-my $daemon  = SpamMeNot::Daemon->new();
+my $daemon  = SpamMeNot::Daemon->new()
+   or say '503 Error: server exited prematurely'
+      and exit 1;
+
 my $timeout = $daemon->session->{timeout};
 
 sub process_request
 {
    my $self = shift @_;
 
-   $daemon->setup_session( $self );
+   $daemon->start_session( $self->{server}{peeraddr} )
+      or say '503 Error: failed to set up session'
+         and exit 1;
 
    eval # eval lets us trap alarms and thereby handle timeouts
    {
-      local $SIG{ALRM} = sub { die "503 Error: Timed Out!\n" };
+      local $SIG{ALRM} = sub { die 'Timed out!' };
 
       my $previous_alarm = alarm $timeout;
 
@@ -54,6 +59,8 @@ sub process_request
          if ( $daemon->converse( $line ) ) # send everything else through
          {
             say $daemon->response;
+
+            exit if $daemon->response =~ /^\d+\sBye/;
          }
          else
          {
@@ -66,7 +73,8 @@ sub process_request
       alarm $previous_alarm;
    };
 
-   say "Timed Out after $timeout seconds." and exit if $@ =~ /Timed out/;
+   say "503 Error: Timed Out after $timeout seconds"
+      and exit if $@ =~ /Timed out/;
 
    exit; # we really, really only want one session per fork (for security)
 }

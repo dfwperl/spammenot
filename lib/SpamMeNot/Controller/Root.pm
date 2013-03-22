@@ -7,7 +7,7 @@ BEGIN { extends 'Catalyst::Controller' }
 use utf8;
 
 use Data::Dumper;
-use Time::HiRes ();
+use Storable qw( lock_store );
 
 #
 # Sets the actions in this controller to be registered with no prefix
@@ -47,14 +47,17 @@ sub begin :Private
    # we always respond with UTF-8 text
    $c->response->header( 'Content-type' => 'text/plain; charset=utf-8' );
 
-   $c->session->{uuid} ||= $c->request->param('uuid'); # the first session call
+   # every request to the Catalyst app from the daemon must include a UUID
+   $c->log->error('Request did not include the mandatory UUID parameter!')
+      and $c->detach( 'error' )
+         unless $c->request->param('uuid');
 
-   if ( $c->session->{uuid} ne $c->request->param('uuid') )
-   {
-      $c->log->error('Session ID mismatch!');
+   $c->session( uuid => $c->request->param('uuid') ) # the first session call
+      unless $c->session->{uuid};
 
-      $c->detach('error');
-   }
+   $c->log->error('Session ID mismatch!')
+      and $c->detach('error')
+         if $c->session->{uuid} ne $c->request->param('uuid');
 
    # after client sent data, they are only allowed to quit, and we are only
    # allowed to call semi-private "_methods()" (methods with leading "_" prefix)
@@ -78,23 +81,30 @@ sub begin :Private
    unless ( $c->session->{ready_for_data} )
    {
       push @{ $c->session->{conversation} },
-         $c->request->path . ' ' . $c->request->param('input');
+         $c->request->path . ' ' . ( $c->request->param('input') || '' );
    }
 }
 
 
-sub _ready_for_data :Local
+sub _get_config :Local
 {
    my ( $self, $c ) = @_;
 
-   if ( $c->session->{ready_for_data} )
+   my $config_store = '/dev/shm/' . $c->session->{uuid} . '.conf';
+
+   my $config = {};
+
+   for my $key ( %{ $c->config } )
    {
-      $c->response->body( 'ready' )
+      $config->{ $key } = $c->config->{ $key }
+         unless ref $c->config->{ $key };
    }
-   else
-   {
-      $c->response->body( 'not ready' )
-   }
+
+   eval { lock_store $config, $config_store }
+      or $c->log->error( 'failed to save session configuration file! ' . $@ )
+         and $c->detach( 'error' );
+
+   $c->response->body( $config_store );
 }
 
 
@@ -191,11 +201,7 @@ sub data :Local
 
    $c->session( ready_for_data => 1 );
 
-   $c->session( write_secret => join ( $$, ( rand Time::HiRes::time ) x 2 ) );
-
-   $c->response->header( 'X-write-secret' => $c->session->{write_secret} );
-
-   $c->response->body( Dumper $c->session ); #'354 Send message content; end with <CRLF>.<CRLF>' );
+   $c->response->body( '354 Send message content; end with <CRLF>.<CRLF>' );
 }
 
 
@@ -227,77 +233,33 @@ sub quit :Local
 }
 
 
-sub _write_message_data :Local
+sub _save_message :Local
 {
    my ( $self, $c ) = @_;
 
-   my $secret = $c->request->param('secret');
+   $c->session( data_was_sent => 1 );
 
-   unless ( $secret eq $c->session->{write_secret} )
-   {
-      $c->detach( error => '503 Error: unauthorized' );
-   }
+   my $message_spool = $c->request->param('spool');
 
-   my $input_line     = $c->request->param('data');
-   my $message_handle = $c->session->{message_handle};
+   $c->log->error( 'mail spool not sent!' )
+      and $c->detach( 'error' )
+         unless $c->request->param('spool');
 
-   unless ( fileno $c->session->{message_handle} )
-   {
-      $c->detach( error => 'message storage unconfigured!' )
-         unless $c->config->{message_storage};
+   $c->log->error( 'mail_storage config variable not set!' )
+      and $c->detach( 'error' )
+         unless $c->config->{mail_storage};
 
-      my $message_file =
-         $c->config->{message_storage } . '/' .
-         $c->request->param('uuid');
+   my $message_file =
+      $c->config->{mail_storage } . '/' .
+      $c->request->param('uuid');
 
-      $c->session( message_file => $message_file );
+   rename $message_spool, $message_file
+      or $c->log->error( 'could not rename spool file!' )
+         and $c->detach( 'error' );
 
-      open $message_handle,
-         '>:unix:encoding(UTF-8)',
-         $c->config->{mail_storage} . '/' . $message_file
-            or $c->log->error( 'Could not write data to message file ' . $! )
-               and $c->detach( error => '503 Error: internal failure' );
+   $c->session( data_was_saved => 1, ready_for_data => 0 );
 
-      $message_handle->autoflush;
-
-      $c->session( message_handle => $message_handle );
-   }
-
-   if ( -s $c->session->{message_file} > $c->config->{max_message_size} )
-   {
-      $c->detach( error => '503 Error: maximum message size exceeded' )
-   }
-
-   # flush input line to disk
-   print $message_handle $input_line;
-
-   # keep track of the last 3 lines, in order to detect the standard
-   # <CRLF>.<CRLF> message termator
-
-   $c->session->{prior_lines} //= [];
-
-   $c->session->{prior_lines} =
-      [ ${ $c->session->prior_lines }->[ 0, 1 ], $input_line ];
-
-   # check for end of message
-   if ( join '', @{ $c->session->{prior_lines} } eq "\r\n.\r\n" )
-   {
-      $c->session->{end_of_message}++;
-
-      $c->response->body( 'end of message' );
-   }
-   else
-   {
-      $c->response->body( 'continue' );
-   }
-}
-
-
-sub _end_of_message :Local
-{
-   my ( $self, $c ) = @_;
-
-   return $c->session->{end_of_message};
+   $c->response->body( '250 OK, message accepted for delivery' );
 }
 
 
@@ -316,8 +278,7 @@ sub error :Private
 
    $c->response->status( 503 );
 
-   $c->delete_session();
-
+   $c->delete_session( 'Forcefully terminating session due to error' );
 }
 
 
@@ -335,7 +296,7 @@ sub default :Path
 
    $c->response->status( 503 );
 
-   $c->delete_session();
+   $c->delete_session( 'Forcefully terminating session due to bad command' );
 }
 
 
@@ -345,7 +306,14 @@ Attempt to render a view, if needed.
 
 =cut
 
-sub end : ActionClass('RenderView') {}
+sub end : ActionClass('RenderView')
+{
+   return;
+
+   my ( $self, $c ) = @_;
+
+   $c->log->warn( Dumper $c->session );
+}
 
 =head1 AUTHOR
 

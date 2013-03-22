@@ -20,6 +20,7 @@ our @EXPORT  = qw(
 our @ISA     = qw( Exporter );
 our $VERSION = '0.000001';
 
+# corresponding values in the spammenot.conf file take precedence over these:
 
 $TIMEOUT           = 120;      # RFCs say 2 minutes
 $MAX_SAFE_READLINE = 1000;     # max length (in chars*) for a "safe" line read
