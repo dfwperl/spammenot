@@ -15,105 +15,13 @@ use Storable qw( lock_store );
 #
 __PACKAGE__->config( namespace => '' );
 
-=head1 NAME
-
-SpamMeNot::Controller::Root - Root Controller for SpamMeNot
-
-=head1 DESCRIPTION
-
-[enter your description here]
-
-=head1 METHODS
-
-=head2 index
-
-The root page (/)
-
-=cut
-
-
-sub index :Path :Args(0)
-{
-   my ( $self, $c ) = @_;
-
-   $c->detach( 'default' );
-}
-
-
-sub begin :Private
-{
-   my ( $self, $c ) = @_;
-
-   # we always respond with UTF-8 text
-   $c->response->header( 'Content-type' => 'text/plain; charset=utf-8' );
-
-   # every request to the Catalyst app from the daemon must include a UUID
-   $c->log->error('Request did not include the mandatory UUID parameter!')
-      and $c->detach( 'error' )
-         unless $c->request->param('uuid');
-
-   $c->session( uuid => $c->request->param('uuid') ) # the first session call
-      unless $c->session->{uuid};
-
-   $c->log->error('Session ID mismatch!')
-      and $c->detach('error')
-         if $c->session->{uuid} ne $c->request->param('uuid');
-
-   # after client sent data, they are only allowed to quit, and we are only
-   # allowed to call semi-private "_methods()" (methods with leading "_" prefix)
-   if
-   (
-      $c->session->{end_of_message}  &&
-      (
-         $c->request->path ne 'quit' &&
-         $c->request->path !~ /^_/
-      )
-   )
-   {
-      $c->detach( error => 'You already sent your message.  Please QUIT.' );
-   }
-
-   $c->session->{conversation} //= [];
-
-   $c->detach( error => '503 Error: too much chatter, just send the data OK?' )
-      if @{ $c->session->{conversation} } > $c->config->{max_chatter};
-
-   unless ( $c->session->{ready_for_data} )
-   {
-      push @{ $c->session->{conversation} },
-         $c->request->path . ' ' . ( $c->request->param('input') || '' );
-   }
-}
-
-
-sub _get_config :Local
-{
-   my ( $self, $c ) = @_;
-
-   my $config_store = '/dev/shm/' . $c->session->{uuid} . '.conf';
-
-   my $config = {};
-
-   for my $key ( %{ $c->config } )
-   {
-      $config->{ $key } = $c->config->{ $key }
-         unless ref $c->config->{ $key };
-   }
-
-   eval { lock_store $config, $config_store }
-      or $c->log->error( 'failed to save session configuration file! ' . $@ )
-         and $c->detach( 'error' );
-
-   $c->response->body( $config_store );
-}
-
-
 =head1 SUPPORTED COMMANDS
 
 HELO     EHLO     AUTH     RSET     NOOP     HELP
 MAIL     RCPT     DATA     VRFY     QUIT     MOO
 
 =cut
+
 
 sub helo :Local
 {
@@ -289,14 +197,86 @@ sub error :Private
 }
 
 
-=head2 default
+sub index :Path :Args(0)
+{
+   my ( $self, $c ) = @_;
 
-Standard 404 error page
+   $c->detach( 'default' );
+}
 
-=cut
+
+sub begin :Private
+{
+   my ( $self, $c ) = @_;
+
+   # we always respond with UTF-8 text
+   $c->response->header( 'Content-type' => 'text/plain; charset=utf-8' );
+
+   # every request to the Catalyst app from the daemon must include a UUID
+   $c->log->error('Request did not include the mandatory UUID parameter!')
+      and $c->detach( 'error' )
+         unless $c->request->param('uuid');
+
+   $c->session( uuid => $c->request->param('uuid') ) # the first session call
+      unless $c->session->{uuid};
+
+   $c->log->error('Session ID mismatch!')
+      and $c->detach('error')
+         if $c->session->{uuid} ne $c->request->param('uuid');
+
+   # after client sent data, they are only allowed to quit, and we are only
+   # allowed to call semi-private "_methods()" (methods with leading "_" prefix)
+   if
+   (
+      $c->session->{end_of_message}  &&
+      (
+         $c->request->path ne 'quit' &&
+         $c->request->path !~ /^_/
+      )
+   )
+   {
+      $c->detach( error => 'You already sent your message.  Please QUIT.' );
+   }
+
+   $c->session->{conversation} //= [];
+
+   $c->detach( error => '503 Error: too much chatter, just send the data OK?' )
+      if @{ $c->session->{conversation} } > $c->config->{max_chatter};
+
+   unless ( $c->session->{ready_for_data} )
+   {
+      push @{ $c->session->{conversation} },
+         $c->request->path . ' ' . ( $c->request->param('input') || '' );
+   }
+}
+
+
+sub _get_config :Local
+{
+   my ( $self, $c ) = @_;
+
+   my $config_store = '/dev/shm/' . $c->session->{uuid} . '.conf';
+
+   my $config = {};
+
+   for my $key ( %{ $c->config } )
+   {
+      $config->{ $key } = $c->config->{ $key }
+         unless ref $c->config->{ $key };
+   }
+
+   eval { lock_store $config, $config_store }
+      or $c->log->error( 'failed to save session configuration file! ' . $@ )
+         and $c->detach( 'error' );
+
+   $c->response->body( $config_store );
+}
+
 
 sub default :Path
 {
+   # where unsupported SMTP commands come to die
+
    my ( $self, $c ) = @_;
 
    $c->response->body( '503 Error: command not recognized' );
@@ -307,12 +287,6 @@ sub default :Path
 }
 
 
-=head2 end
-
-Attempt to render a view, if needed.
-
-=cut
-
 sub end : ActionClass('RenderView')
 {
    return;
@@ -322,16 +296,6 @@ sub end : ActionClass('RenderView')
    $c->log->warn( Dumper $c->session );
 }
 
-=head1 AUTHOR
-
-superman,,,
-
-=head1 LICENSE
-
-This library is free software. You can redistribute it and/or modify
-it under the same terms as Perl itself.
-
-=cut
 
 __PACKAGE__->meta->make_immutable;
 
