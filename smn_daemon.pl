@@ -13,7 +13,8 @@ BEGIN
    STDERR->autoflush; # buffering
 
    # gracefully? deals with an anomaly in the Net::Server::PreFork module
-   $SIG{__DIE__} = sub { print STDERR 'Died: '; warn @_ };
+   require Exception::Handler;
+   $SIG{__DIE__} = sub { print STDERR Exception::Handler->new->trace( @_ ) };
 }
 
 use lib 'lib'; # all our modules live in $APPROOT/lib/
@@ -32,7 +33,7 @@ use parent qw( Net::Server::PreFork );
 # to the intelligent catalyst application which contains all the logic.
 
 my $daemon  = SpamMeNot::Daemon->new();
-my $timeout = $daemon->_config->{timeout};
+my $timeout = $daemon->session->{timeout};
 
 sub process_request
 {
@@ -54,13 +55,13 @@ sub process_request
 
             if ( $daemon->ready_for_data )
             {
-               say $daemon->error and return
+               say $daemon->error and exit
                   unless $daemon->write_message_data();
             }
          }
          else
          {
-            say $daemon->error and return;
+            say $daemon->error and exit;
          }
 
          alarm $timeout;
@@ -69,9 +70,9 @@ sub process_request
       alarm $previous_alarm;
    };
 
-   $daemon->shutdown_session();
+   say "Timed Out after $timeout seconds." and exit if $@ =~ /Timed out/;
 
-   say "Timed Out after $timeout seconds." and return if $@ =~ /Timed out/;
+   exit; # we really, really only want one session per fork (for security)
 }
 
 package main;
@@ -86,9 +87,9 @@ my $smnserver = SpamMeNot::Server->new # XXX how can these options be improved?
    port              => 20202,
    min_servers       => 100,
    min_spare_servers => 50,
-   max_spare_servers => 100,
+   max_spare_servers => 300,
    max_servers       => 400,
-   max_requests      => 15,
+   max_requests      => 1,
    user              => 'spammenot',
    group             => 'spammenot',
    commandline       => $0,

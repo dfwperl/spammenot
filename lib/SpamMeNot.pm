@@ -29,7 +29,7 @@ use Catalyst qw/
    StackTrace
    Session
    Session::Store::FastMmap
-   Session::State::Stash
+   Session::State::Cookie
 /;
 
 our $VERSION = '0.000001';

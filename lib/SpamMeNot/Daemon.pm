@@ -21,13 +21,11 @@ sub new
    my $self  = bless {}, shift @_;
    my $stdin = \*STDIN;
 
-   $self->{_config}  = {};
-   $self->{_session} = {};
-
    binmode $stdin, ':unix:encoding(UTF-8)';
 
-   $self->_session( stdin => $stdin );
-   $self->_config( timeout => $TIMEOUT );
+   $self->{session} = {};
+
+   $self->session( { stdin => $stdin, timeout => $TIMEOUT } );
 
    return $self;
 }
@@ -65,7 +63,7 @@ __BANNER__
    # ... incude the $UUID, the $IP, and a timestamp
    $self->log_incoming_request( $uuid, $ip, scalar gmtime );
 
-   $self->_session( {
+   $self->session( {
       uuid  => $uuid,
       peer  => $ip,
    } );
@@ -74,52 +72,20 @@ __BANNER__
 }
 
 
-sub _config
+sub session
 {
    my ( $self, $name, $val ) = @_;
 
-   return $self->{_config} unless defined $name;
+   return $self->{session} unless defined $name;
 
    if ( ref $name && ref $name eq 'HASH' )
    {
-      @{ $self->{_config} }{ keys %$name } = values %$name;
+      @{ $self->{session} }{ keys %$name } = values %$name;
    }
    else
    {
-      $self->{_config}->{ $name } = $val
+      $self->{session}->{ $name } = $val
    }
-
-   return $self;
-}
-
-
-sub _session
-{
-   my ( $self, $name, $val ) = @_;
-
-   return $self->{_session} unless defined $name;
-
-   if ( ref $name && ref $name eq 'HASH' )
-   {
-      @{ $self->{_session} }{ keys %$name } = values %$name;
-   }
-   else
-   {
-      $self->{_session}->{ $name } = $val
-   }
-
-   return $self;
-}
-
-
-sub shutdown_session
-{
-   my $self = shift @_;
-
-   warn 'Session is over.  Everybody go home';
-
-   $self->{_session} = {};
-   $self->{_config}  = {};
 
    return $self;
 }
@@ -146,7 +112,7 @@ sub safe_readline
 
    # read UTF-8 encoded unicode chars, one at a time, until the end of the line
 
-   while ( $chars_read += read $self->_session->{stdin}, $utf8_char, 1 )
+   while ( $chars_read += read $self->session->{stdin}, $utf8_char, 1 )
    {
       $buffer .= $utf8_char;
 
@@ -166,34 +132,27 @@ sub converse
 {
    my ( $self, $input ) = @_;
 
-   push @{ $self->_session->{conversation} }, $input;
-
-   return $self->too_much_chatter
-      if @{ $self->_session->{conversation} } > $MAX_CONVERSATION;
-
    my ( $smtp_command, $smtp_arg ) = split / /, $input, 2;
 
    $smtp_command = lc $smtp_command;
 
    if ( !defined $smtp_command || !length $smtp_command )
    {
-      $self->_session->{error} = '503 Error: bad syntax';
+      $self->session->{error} = '503 Error: bad syntax';
 
       return;
    }
 
    my $params =
    {
-      input        => $smtp_arg,
-      last_command => $self->_session->{last_command},
-      uuid         => $self->_session->{uuid},
-      peer         => $self->_session->{peer},
-      conversation => $self->_session->{conversation},
+      input => $smtp_arg,
+      uuid  => $self->session->{uuid},
+      peer  => $self->session->{peer},
    };
 
    my $response = $self->send_message( http => $smtp_command => $params );
 
-   $self->_session(
+   $self->session(
       {
          response     => $response,
          last_command => $smtp_command,
@@ -205,47 +164,38 @@ sub converse
    return;
 }
 
+
 sub write_message_data
 {
    my $self = shift @_;
 
    my $params =
    {
-      uuid         => $self->_session->{uuid},
-      peer         => $self->_session->{peer},
-      write_secret => $self->_session->{write_secret},
-      conversation => $self->_session->{conversation},
-      last_command => $self->_session->{last_command},
+      uuid   => $self->session->{uuid},
+      peer   => $self->session->{peer},
+      secret => $self->session->{secret},
    };
 
    while ( my $line = $self->safe_readline() )
    {
-      $params->{input} = $line;
+      $params->{data} = $line;
 
-      my $response = $self->send_message( http => '/_write_data' => $params );
+      my $response = $self->send_message
+         (
+            http => '/_write_message_data' => $params
+         );
 
       unless ( $response )
       {
-         $self->_session->{error} = '503 Error: internal problem';
+         $self->session->{error} = '503 Error: internal problem';
 
          return;
       }
 
-      $self->_session->{end_of_message}++ if $response eq 'end_of_message';
+      $self->session->{end_of_message}++ if $response eq 'end of message';
 
       return 1;
    }
-}
-
-
-sub too_much_chatter
-{
-   my $self = shift @_;
-
-   $self->_session->{error} =
-      '503 Error: too much chatter, just send the damn data OK?';
-
-   return;
 }
 
 
@@ -259,41 +209,38 @@ sub send_message
       $APP_SERVER_PORT,
       $path;
 
+   my $ua = $self->session->{user_agent} ||
+      LWP::UserAgent->new( cookie_jar => {} );
+
    my $response = LWP::UserAgent->new->post( $uri => $params );
 
    return $response->content if $response->is_success;
 
-   $self->_session->{error} = $response->status_line;
+   $self->session->{error} = $response->status_line;
 
-   $self->_session->{write_secret} = $response->header( 'X-write-secret' )
+   $self->session->{secret} = $response->header( 'X-Write-Secret' )
       if $path eq 'data';
 
    return;
 }
 
 
-sub end_of_message
-{
-   my $self = shift @_;
-
-   return $self->_session->{end_of_message};
-}
+sub end_of_message { shift->session->{end_of_message} }
 
 
-sub response { shift->_session->{response} }
+sub response { shift->session->{response} }
 
 
 sub ready_for_data
 {
-   shift->_session->{conversation}->[-1] =~ /$READY_FOR_DATA/
+   shift->send_message( http => _ready_for_data => {} ) eq 'ready'
 }
 
 
-sub error { shift->_session->{error} }
+sub error { shift->session->{error} }
 
 
 1;
 
 __END__
-
 
