@@ -199,6 +199,9 @@ sub data :Local
 {
    my ( $self, $c ) = @_;
 
+   $c->detach( error => [ '503 You already sent your message' ] )
+      if $c->session->{data_was_sent};
+
    $c->session( ready_for_data => 1 );
 
    $c->response->body( '354 Send message content; end with <CRLF>.<CRLF>' );
@@ -269,10 +272,14 @@ sub error :Private
 
    if ( $error_message )
    {
+      $c->log->error( $error_message );
+
       $c->response->body( $error_message );
    }
    else
    {
+      $c->log->error( 'Something went wrong.  $c->detach("error") was called' );
+
       $c->response->body( '503 Error: Something went wrong' );
    }
 

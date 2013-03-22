@@ -1,8 +1,11 @@
 package SpamMeNot::Daemon;
 
-# this module should be simple; push as much logic upstream to the catalyst
-# application as is possible.  The point of the daemon is to be a safe and
-# highly-available pass-through to the catalyst app.
+# This code is used by the client-facing daemon.  It is not part of the
+# catalyst application.  The point of this module is that it should be simple;
+# it should push as much logic upstream to the catalyst root controller as is
+# possible.  The purpose of the daemon that uses this code is to be a safe and
+# highly-available pass-through to the catalyst app.  Catalyst is supposed to
+# do the heavy lifting.
 #
 # The above stated goals have to be balanced with the needs for security,
 # encapsulation from the main namespace of the daemon, and i18n.
@@ -147,7 +150,7 @@ sub safe_readline
 503: Error: Max safe line length exceeded.  Max allowed length is %d.
 __NOT_SAFE__
 
-      warn "BUFFER! => $buffer" and return $buffer if $utf8_char eq "\n";
+      return $buffer if $utf8_char eq "\n";
    }
 
    return;
@@ -157,8 +160,6 @@ __NOT_SAFE__
 sub converse
 {
    my ( $self, $input ) = @_;
-
-   return $self->write_message_data() if $self->ready_for_data;
 
    my ( $smtp_command, $smtp_arg ) = split / /, $input, 2;
 
@@ -181,7 +182,7 @@ sub converse
 }
 
 
-sub write_message_data
+sub spool_message_data
 {
    my $self = shift @_;
 
@@ -210,16 +211,12 @@ sub write_message_data
 
    MESSAGE_READ: while ( my $line = $self->safe_readline() )
    {
-
       # keep track of the last 3 lines, in order to detect the standard
       # <CRLF>.<CRLF> message termator
 
       $self->session(
          prior_lines => [ @{ $self->session->{prior_lines } }[ 1, 2 ], $line ]
       );
-
-      use Data::Dumper;
-      warn Dumper $self->session->{prior_lines};
 
       # flush input line to disk
       print $message_handle $line;
@@ -290,19 +287,27 @@ sub send_message
 
    $cookie_jar->save();
 
-   chomp $path;
-
-   $self->session( ready_for_data => 1 ) if $path eq 'data';
-
    return $response->content if $response->is_success;
 
-   $self->session( error => $response->status_line );
+   $self->session( error => ( $response->content || $response->status_line ) );
 
    return;
 }
 
 
-sub ready_for_data { shift->session->{ready_for_data} }
+sub ready_for_data
+{
+   my( $self, $input ) = @_;
+
+   return $input =~ /^DATA$/i && !$self->session->{data_was_sent};
+}
+
+sub ready_to_quit
+{
+   my( $self, $input ) = @_;
+
+   return $input =~ /^QUIT$/i;
+}
 
 
 sub end_of_message { shift->session->{end_of_message} }

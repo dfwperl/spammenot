@@ -60,7 +60,14 @@ sub process_request
          {
             say $daemon->response;
 
-            exit if $daemon->response =~ /^\d+\sBye/;
+            if ( $daemon->ready_for_data( $line ) )
+            {
+               $daemon->spool_message_data();
+
+               say $daemon->response;
+            }
+
+            exit if $daemon->ready_to_quit( $line );
          }
          else
          {
