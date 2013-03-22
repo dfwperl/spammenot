@@ -47,13 +47,23 @@ sub begin :Private
    # we always respond with UTF-8 text
    $c->response->header( 'Content-type' => 'text/plain; charset=utf-8' );
 
-   # after client sent data, they are only allowed to quit
+   $c->session->{uuid} ||= $c->request->param('uuid'); # the first session call
+
+   if ( $c->session->{uuid} ne $c->request->param('uuid') )
+   {
+      $c->log->error('Session ID mismatch!');
+
+      $c->detach('error');
+   }
+
+   # after client sent data, they are only allowed to quit, and we are only
+   # allowed to call semi-private "_methods()" (methods with leading "_" prefix)
    if
    (
-      $c->session->{called_data} &&
+      $c->session->{end_of_message}  &&
       (
-         $c->request->path ne 'quit'       &&
-         $c->request->path ne '_write_data'
+         $c->request->path ne 'quit' &&
+         $c->request->path !~ /^_/
       )
    )
    {
@@ -65,8 +75,11 @@ sub begin :Private
    $c->detach( error => '503 Error: too much chatter, just send the data OK?' )
       if @{ $c->session->{conversation} } > $c->config->{max_chatter};
 
-   push @{ $c->session->{conversation} }, $c->request->param( 'input' )
-      if $c->request->param( 'input' );
+   unless ( $c->session->{ready_for_data} )
+   {
+      push @{ $c->session->{conversation} },
+         $c->request->path . ' ' . $c->request->param('input');
+   }
 }
 
 
@@ -74,7 +87,7 @@ sub _ready_for_data :Local
 {
    my ( $self, $c ) = @_;
 
-   if ( $c->session->{conversation}->[-1] =~ /^DATA\r?\n$/ )
+   if ( $c->session->{ready_for_data} )
    {
       $c->response->body( 'ready' )
    }
@@ -96,9 +109,9 @@ sub helo :Local
 {
    my ( $self, $c ) = @_;
 
-   my $input = $c->request->param( 'input' );
+   my $input = $c->request->param('input');
 
-   $c->response->body( 'HELO => ' . Dumper $c->request->params );
+   $c->response->body( 'HELO => ' . Dumper $c->session );
 }
 
 
@@ -106,9 +119,9 @@ sub ehlo :Local
 {
    my ( $self, $c ) = @_;
 
-   my $input = $c->request->param( 'input' );
+   my $input = $c->request->param('input');
 
-   $c->response->body( 'EHLO => ' . Dumper $c->request->params );
+   $c->response->body( 'EHLO => ' . Dumper $c->session );
 }
 
 
@@ -116,9 +129,9 @@ sub auth :Local
 {
    my ( $self, $c ) = @_;
 
-   my $input = $c->request->param( 'input' );
+   my $input = $c->request->param('input');
 
-   $c->response->body( 'AUTH IS A NOOP => ' . Dumper $c->request->params );
+   $c->response->body( 'AUTH IS A NOOP => ' . Dumper $c->session );
 }
 
 
@@ -126,9 +139,9 @@ sub rset :Local
 {
    my ( $self, $c ) = @_;
 
-   my $input = $c->request->param( 'input' );
+   my $input = $c->request->param('input');
 
-   $c->response->body( 'RSET YOSELF => ' . Dumper $c->request->params );
+   $c->response->body( 'RSET YOSELF => ' . Dumper $c->session );
 }
 
 
@@ -136,9 +149,9 @@ sub noop :Local
 {
    my ( $self, $c ) = @_;
 
-   my $input = $c->request->param( 'input' );
+   my $input = $c->request->param('input');
 
-   $c->response->body( 'NOOP => ' . Dumper $c->request->params );
+   $c->response->body( 'NOOP => ' . Dumper $c->session );
 }
 
 
@@ -146,9 +159,9 @@ sub help :Local
 {
    my ( $self, $c ) = @_;
 
-   my $input = $c->request->param( 'input' );
+   my $input = $c->request->param('input');
 
-   $c->response->body( 'HELP => ' . Dumper $c->request->params );
+   $c->response->body( 'HELP => ' . Dumper $c->session );
 }
 
 
@@ -156,9 +169,9 @@ sub mail :Local
 {
    my ( $self, $c ) = @_;
 
-   my $input = $c->request->param( 'input' );
+   my $input = $c->request->param('input');
 
-   $c->response->body( 'MAIL => ' . Dumper $c->request->params );
+   $c->response->body( 'MAIL => ' . Dumper $c->session );
 }
 
 
@@ -166,9 +179,9 @@ sub rcpt :Local
 {
    my ( $self, $c ) = @_;
 
-   my $input = $c->request->param( 'input' );
+   my $input = $c->request->param('input');
 
-   $c->response->body( 'RCPT => ' . Dumper $c->request->params );
+   $c->response->body( 'RCPT => ' . Dumper $c->session );
 }
 
 
@@ -176,13 +189,13 @@ sub data :Local
 {
    my ( $self, $c ) = @_;
 
-   $c->session( called_data => 1 );
+   $c->session( ready_for_data => 1 );
 
-   $c->session( write_secret => join ( '', ( rand Time::HiRes::time ) x 2 ) );
+   $c->session( write_secret => join ( $$, ( rand Time::HiRes::time ) x 2 ) );
 
    $c->response->header( 'X-write-secret' => $c->session->{write_secret} );
 
-   $c->response->body( '354 Send message content; end with <CRLF>.<CRLF>' );
+   $c->response->body( Dumper $c->session ); #'354 Send message content; end with <CRLF>.<CRLF>' );
 }
 
 
@@ -190,9 +203,9 @@ sub vrfy :Local
 {
    my ( $self, $c ) = @_;
 
-   my $input = $c->request->param( 'input' );
+   my $input = $c->request->param('input');
 
-   $c->response->body( 'VRFY => ' . Dumper $c->request->params );
+   $c->response->body( 'VRFY => ' . Dumper $c->session );
 }
 
 
@@ -218,14 +231,14 @@ sub _write_message_data :Local
 {
    my ( $self, $c ) = @_;
 
-   my $secret = $c->request->param( 'secret' );
+   my $secret = $c->request->param('secret');
 
    unless ( $secret eq $c->session->{write_secret} )
    {
       $c->detach( error => '503 Error: unauthorized' );
    }
 
-   my $input_line     = $c->request->param( 'data' );
+   my $input_line     = $c->request->param('data');
    my $message_handle = $c->session->{message_handle};
 
    unless ( fileno $c->session->{message_handle} )
@@ -235,7 +248,7 @@ sub _write_message_data :Local
 
       my $message_file =
          $c->config->{message_storage } . '/' .
-         $c->request->param( 'uuid' );
+         $c->request->param('uuid');
 
       $c->session( message_file => $message_file );
 

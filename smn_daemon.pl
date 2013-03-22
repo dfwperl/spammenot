@@ -49,15 +49,11 @@ sub process_request
 
       while ( my $line = $daemon->safe_readline() )
       {
-         if ( $daemon->converse( $line ) )
+         next if $line =~ /^_/; # no internal commands allowed to public
+
+         if ( $daemon->converse( $line ) ) # send everything else through
          {
             say $daemon->response;
-
-            if ( $daemon->ready_for_data )
-            {
-               say $daemon->error and exit
-                  unless $daemon->write_message_data();
-            }
          }
          else
          {

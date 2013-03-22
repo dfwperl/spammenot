@@ -1,5 +1,12 @@
 package SpamMeNot::Daemon;
 
+# this module should be simple; push as much logic upstream to the catalyst
+# application as is possible.  The point of the daemon is to be a safe and
+# highly-available pass-through to the catalyst app.
+#
+# The above stated goals have to be balanced with the needs for security,
+# encapsulation from the main namespace of the daemon, and i18n.
+
 use strict;
 use warnings;
 
@@ -10,6 +17,7 @@ our $VERSION = '0.000001';
 
 use Data::UUID;
 use LWP::UserAgent;
+use HTTP::Cookies;
 
 use lib 'lib';
 
@@ -18,6 +26,8 @@ use SpamMeNot::Common; # import globals and config defaults (like "$TIMEOUT")
 
 sub new
 {
+   # STDIN has to be carefully managed; that's the primary reason for new()
+
    my $self  = bless {}, shift @_;
    my $stdin = \*STDIN;
 
@@ -42,7 +52,7 @@ sub setup_session
    my $ip = $server->{server}{peeraddr} // '<unknown peer>';
 
    print <<__BANNER__;
-220 Hello $ip - This is a SpamMeNot SMTP server, so we don't be needing viagra
+220 Hello $ip - This is a SpamMeNot SMTP server, so we won't be needing viagra
 __BANNER__
 
    # provides ordered warning messages while logging
@@ -50,6 +60,7 @@ __BANNER__
 
    # redefine effective warn() call to include a timestamp and the $UUID
    # *this HAS to be in the proces_request() method... don't move it out!
+
    $SIG{__WARN__} = sub
    {
       # increment warn count
@@ -61,11 +72,13 @@ __BANNER__
 
    # separating banner for each request
    # ... incude the $UUID, the $IP, and a timestamp
+
    $self->log_incoming_request( $uuid, $ip, scalar gmtime );
 
    $self->session( {
-      uuid  => $uuid,
-      peer  => $ip,
+      uuid    => $uuid,               # each session has a unique identifier
+      peer    => $ip,                 # pass the client IP through
+      cookies => '/dev/shm/' . $uuid, # you should be running this app on linux
    } );
 
    return $self;
@@ -132,16 +145,11 @@ sub converse
 {
    my ( $self, $input ) = @_;
 
+   return $self->write_message_data() if $self->ready_for_data;
+
    my ( $smtp_command, $smtp_arg ) = split / /, $input, 2;
 
    $smtp_command = lc $smtp_command;
-
-   if ( !defined $smtp_command || !length $smtp_command )
-   {
-      $self->session->{error} = '503 Error: bad syntax';
-
-      return;
-   }
 
    my $params =
    {
@@ -152,12 +160,7 @@ sub converse
 
    my $response = $self->send_message( http => $smtp_command => $params );
 
-   $self->session(
-      {
-         response     => $response,
-         last_command => $smtp_command,
-      }
-   );
+   $self->session( response => $response );
 
    return 1 if $response;
 
@@ -187,12 +190,12 @@ sub write_message_data
 
       unless ( $response )
       {
-         $self->session->{error} = '503 Error: internal problem';
+         $self->session( error => '503 Error: internal problem' );
 
          return;
       }
 
-      $self->session->{end_of_message}++ if $response eq 'end of message';
+      $self->session( end_of_message => 1 ) if $response eq 'end of message';
 
       return 1;
    }
@@ -204,21 +207,25 @@ sub send_message
    my ( $self, $scheme, $path, $params ) = @_;
 
    my $uri = sprintf '%s://%s:%d/%s',
-      $scheme,
-      $APP_SERVER_HOST,
-      $APP_SERVER_PORT,
-      $path;
+      $scheme, $APP_SERVER_HOST, $APP_SERVER_PORT, $path;
 
-   my $ua = $self->session->{user_agent} ||
-      LWP::UserAgent->new( cookie_jar => {} );
+   my $ua = $self->session->{ua} || LWP::UserAgent->new();
 
-   my $response = LWP::UserAgent->new->post( $uri => $params );
+   # we can re-use the user agent, but not the cookies object, which sux
+   $ua->cookie_jar(
+      HTTP::Cookies->new( file => $self->session->{cookies}, autosave => 1 )
+   );
+
+   # allows us to re-use the user agent (an optimization)
+   $self->session( ua => $ua );
+
+   my $response = $ua->post( $uri => $params );
 
    return $response->content if $response->is_success;
 
-   $self->session->{error} = $response->status_line;
+   $self->session( error => $response->status_line );
 
-   $self->session->{secret} = $response->header( 'X-Write-Secret' )
+   $self->session( secret => $response->header( 'X-Write-Secret' ) )
       if $path eq 'data';
 
    return;
@@ -233,12 +240,31 @@ sub response { shift->session->{response} }
 
 sub ready_for_data
 {
-   shift->send_message( http => _ready_for_data => {} ) eq 'ready'
+   my $self = shift @_;
+
+   return 1
+      if $self->session->{ready_for_data} &&
+         $self->session->{ready_for_data} eq 'ready';
+
+   $self->session(
+      ready_for_data => $self->send_message( http => _ready_for_data => {} )
+   );
+
+   return $self->session->{ready_for_data} eq 'ready';
 }
 
 
 sub error { shift->session->{error} }
 
+
+sub DESTROY {
+
+   my $self = shift @_;
+
+   eval { unlink $self->session->{cookies} };
+
+   delete $self->{session};
+}
 
 1;
 
