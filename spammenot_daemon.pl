@@ -3,8 +3,11 @@
 use strict;
 use warnings;
 
-use 5.014; # minimum supported version of Perl is 5.14 (solid unicode support)
-use utf8;  # otherwise regexes on utf8-encode strings completely fail
+use 5.014;     # minimum supported Perl version is 5.14 (solid unicode support)
+use utf8;      # otherwise regexes on utf8-encode strings completely fail
+use lib 'lib'; # all our modules live in $APPROOT/lib/
+
+use SpamMeNot::DropPerms; # abandon root privileges immediately
 
 BEGIN
 {
@@ -17,9 +20,6 @@ BEGIN
    $SIG{__DIE__} = sub { print STDERR Exception::Handler->new->trace( @_ ) };
 }
 
-use lib 'lib'; # all our modules live in $APPROOT/lib/
-
-use SpamMeNot::DropPerms; # abandon root privileges immediately
 use SpamMeNot::Daemon;    # all the methods (routines) used by this daemon
 
 package SpamMeNot::Server;

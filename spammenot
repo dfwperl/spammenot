@@ -4,6 +4,6 @@ PERL=$( which perl ); # run the deamon with my perlbrew if I have one set up
 
 [[ "$DEBUG" == "" ]] && DEBUG=0; # ignores $DEBUG if set to 1, else sets it to 0
 
-/usr/bin/sudo DEBUG=$DEBUG $PERL smn_daemon.pl
+/usr/bin/sudo DEBUG=$DEBUG $PERL spammenot_daemon.pl
 
 exit $?;
