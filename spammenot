@@ -2,10 +2,10 @@
 #
 ### BEGIN INIT INFO
 # Provides:          spammenot
-# Required-Start:    $syslog $sudo
-# Required-Stop:     $syslog $sudo
-# Should-Start:      $network $time
-# Should-Stop:       $network $time
+# Required-Start:    $syslog $network
+# Required-Stop:     $syslog $network
+# Should-Start:      $time
+# Should-Stop:       $time
 # Default-Start:     2 3 4 5
 # Default-Stop:      0 1 6
 # Short-Description: Start and stop the SpamMeNot service daemons
@@ -19,10 +19,7 @@
 # links in the /etc/rc.* directory tree and enable the service to
 # boot time using whatever tool you prefer (chkconfig, update-rc.d, etc)
 
-export PATH=/usr/local/bin:/usr/bin # make subsequent shell calls safe and secure
-
-# nothing intended for STDERR should be shown to the user, but caught and handled instead
-2>/dev/null
+export PATH=/usr/local/bin:/usr/bin:/bin # make subsequent shell calls safe and secure
 
 # you can only start/stop spammenot services if you have root permissions
 if [[ "$(/usr/bin/id -u)" != "0" ]];
@@ -32,7 +29,7 @@ then
    exit 1;
 fi
 
-if [[ ! -f /etc/spammenot/environment ]]; # this will bring in your perlbrew if you are using one
+if [[ ! -e '/etc/spammenot/environment' ]]; # this will bring in your perlbrew if you are using one
 then
    echo '"/etc/spammenot/environment" file not found.  Cannot continue.  Aborted.'
    exit 1;
@@ -66,46 +63,120 @@ PERL=$( which perl ); # runs the deamon with my perlbrew if I have one set up
 case "$1" in
    start)
 
-      sudo DEBUG=$DEBUG $PERL spammenot_daemon.pl
+      echo -n 'Starting Spammenot...'
 
-      sudo DEBUG=$DEBUG $PERL spammenot_backend.pl \
-         --background \
-         --pidfile /var/run/spammenot_backend.pid \
-         --port $SPAMMENOT_BACKEND_PORT
+      [[ $DEBUG -ne 0 ]] && echo -n 'Running in DEBUG mode...'
+
+      # launch the backend first, in a subshell, in the background.
+      # don't use the --background flag to the perl script!  Catalyst will
+      # close STDERR and generally mess up all kinds of things!  Use this
+      # subshell trick instead:
+      { DEBUG=$DEBUG $PERL spammenot_backend.pl \
+         --host localhost \
+         --pidfile /tmp/spammenot_backend.pid \
+         --port $SPAMMENOT_BACKEND_PORT >/var/log/spammenot/app.log 2>&1 & }
+
+      # wait for it to get started
+      sleep 3;
+
+      # start up the daemon which will immediately attempt to connect to backend
+      DEBUG=$DEBUG $PERL spammenot_daemon.pl >/var/log/spammenot/server.log 2>&1
+
+      $0 status
+
+      exit 0;
    ;;
 
    stop)
 
       echo -n 'Stopping Spammenot...'
 
-      2>/dev/null
+      ISRUNNING=0;
 
-      if [[ ! -f '/var/run/spammenot_daemon.pid' || ! -f '/var/run/spammenot_backend.pid' ]];
+      [[ $( ps aufx \
+         | grep -P 'spammenot_(daemon|backend)' \
+         | grep -v grep \
+         | awk '{ print $2 }' \
+         | wc -l ) -gt 0 ]] && ISRUNNING=1
+
+      if [[ $ISRUNNING -eq 1 ]];
       then
-         echo 'One or more of the PID files for the SpamMeNot services is missing.  This is almost certainly bad.  I will try to cleanly exit any SpamMeNot processes I can find, but you should double check to make sure I did not miss anything';
+         if [[ ! -f '/tmp/spammenot_daemon.pid' || ! -f '/tmp/spammenot_backend.pid' ]];
+         then
+            echo '!! SpamMeNot is running, but one/more PID file(s) are missing.  I will try to cleanly exit any SpamMeNot processes I can find, but you should double check to make sure I did not miss anything !!';
+         else
+            kill $( cat /tmp/spammenot_daemon.pid 2>/dev/null ) 2>/dev/null;
+            kill $( cat /tmp/spammenot_backend.pid 2>/dev/null ) 2>/dev/null;
+
+            sleep 2;
+
+            ps aufx \
+               | grep -P 'spammenot_(daemon|backend)' \
+               | grep -v grep \
+               | awk '{ print $2 }' \
+               | while read pid; do kill $pid 2>/dev/null; done;
+
+            sleep 2;
+
+            ps aufx \
+               | grep -P 'spammenot_(daemon|backend)' \
+               | grep -v grep \
+               | awk '{ print $2 }' \
+               | while read pid; do kill -9 $pid 2>/dev/null; done;
+         fi
       fi
 
-      kill $( cat /var/run/spammenot_daemon.pid );
-      kill $( cat /var/run/spammenot_backend.pid );
+      rm -f /tmp/spammenot_daemon.pid >/dev/null 2>&1
+      rm -f /tmp/spammenot_backend.pid >/dev/null 2>&1
 
-      sleep 2;
+      $0 status
 
-      ps aufx | grep -P 'spammenot_(daemon|backend)' | grep -v grep | awk '{ print $2 }' | xargs kill
-
-      sleep 2;
-
-      ps aufx | grep -P 'spammenot_(daemon|backend)' | grep -v grep | awk '{ print $2 }' | xargs kill -9
-
-      rm -f /var/run/spammenot_daemon.pid
-      rm -f /var/run/spammenot_backend.pid
-
-      echo 'OK'
+      exit 0;
    ;;
 
    restart)
+      $SELF stop
+      $SELF start
+      exit $?;
    ;;
 
    status)
+
+      DAEMON_PROC_COUNT=$( ps aufx | grep -P 'spammenot_daemon' | grep -v grep | wc -l );
+      BACKEND_PROC_COUNT=$( ps aufx | grep -P 'spammenot_backend' | grep -v grep | wc -l );
+
+      [[ $DAEMON_PROC_COUNT -gt 0 ]] && DAEMON_PROC_COUNT=1
+      [[ $BACKEND_PROC_COUNT -gt 0 ]] && BACKEND_PROC_COUNT=1
+
+      if [[ $(( $DAEMON_PROC_COUNT + $BACKEND_PROC_COUNT )) -eq 2 ]];
+      then
+         echo 'SpamMeNot services running OK'
+         exit 0;
+      elif [[ $(( $DAEMON_PROC_COUNT + $BACKEND_PROC_COUNT )) -eq 0 ]];
+      then
+         echo 'SpamMeNot services NOT running now'
+         exit 0;
+      else
+         echo -n 'SpamMeNot running in degraded state!  ';
+
+         if [[ $DAEMON_PROC_COUNT -gt 0 ]];
+         then
+           echo -n 'SpamMeNot daemon is running, but ';
+         else
+           echo -n 'SpamMeNot daemon is NOT running, but ';
+         fi
+
+         if [[ $BACKEND_PROC_COUNT -gt 0 ]];
+         then
+           echo -n 'SpamMeNot backend server is running';
+         else
+           echo -n 'SpamMeNot backend server is NOT running';
+         fi
+
+         echo '...NOT OK!  Restart recommended.'
+
+         exit 1;
+      fi
    ;;
 
    *)

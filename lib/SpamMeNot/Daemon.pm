@@ -42,6 +42,8 @@ sub new
 
    my $config_file = $self->send_message( http => _get_config => $session_env );
 
+   warn $self->session->{error} if $self->session->{error};
+
    my $config;
 
    eval { $config = lock_retrieve $config_file } or warn $@ and return;

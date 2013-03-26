@@ -105,7 +105,7 @@ my $smnserver = SpamMeNot::Server->new # XXX how can these options be improved?
    group             => 'spammenot',
    commandline       => $0,
    log_file          => '/var/log/spammenot/server.log',
-   pid_file          => '/var/run/spammenot_daemon.pid',
+   pid_file          => '/tmp/spammenot_daemon.pid',
 ) or die "$! - $@";
 
 $smnserver->run();
