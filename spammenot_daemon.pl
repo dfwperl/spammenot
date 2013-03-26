@@ -93,7 +93,7 @@ warn "I'm starting a server daemon in debug mode\n" if $ENV{DEBUG};
 # warning: the log file used below must be writable by the designated user
 my $smnserver = SpamMeNot::Server->new # XXX how can these options be improved?
 (
-   background        => 0,
+   background        => 1,
    proto             => 'tcp',
    port              => 20202,
    min_servers       => 100,
@@ -105,6 +105,7 @@ my $smnserver = SpamMeNot::Server->new # XXX how can these options be improved?
    group             => 'spammenot',
    commandline       => $0,
    log_file          => '/var/log/spammenot/server.log',
+   pid_file          => '/var/run/spammenot_daemon.pid',
 ) or die "$! - $@";
 
 $smnserver->run();

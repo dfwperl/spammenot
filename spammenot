@@ -1,9 +1,118 @@
 #!/bin/bash
+#
+### BEGIN INIT INFO
+# Provides:          spammenot
+# Required-Start:    $syslog $sudo
+# Required-Stop:     $syslog $sudo
+# Should-Start:      $network $time
+# Should-Stop:       $network $time
+# Default-Start:     2 3 4 5
+# Default-Stop:      0 1 6
+# Short-Description: Start and stop the SpamMeNot service daemons
+# Description:       Start and stop the SpamMeNot service daemons
+#                    including spammenot_daemon and spammenot_backend.pl
+### END INIT INFO
+#
 
-PERL=$( which perl ); # run the deamon with my perlbrew if I have one set up
+# This script should be named "spammenot" and placed in /etc/init.d/
+# Use your operating system-specific method of creating appropriate
+# links in the /etc/rc.* directory tree and enable the service to
+# boot time using whatever tool you prefer (chkconfig, update-rc.d, etc)
 
+export PATH=/usr/local/bin:/usr/bin # make subsequent shell calls safe and secure
+
+# nothing intended for STDERR should be shown to the user, but caught and handled instead
+2>/dev/null
+
+# you can only start/stop spammenot services if you have root permissions
+if [[ "$(/usr/bin/id -u)" != "0" ]];
+then
+   echo 'Insufficient permissions.  Invoke spammenot as root only.  Aborted.'
+
+   exit 1;
+fi
+
+if [[ ! -f /etc/spammenot/environment ]]; # this will bring in your perlbrew if you are using one
+then
+   echo '"/etc/spammenot/environment" file not found.  Cannot continue.  Aborted.'
+   exit 1;
+else
+   source /etc/spammenot/environment # the environment defines $PATH, $SPAMMENOT_HOME, and more
+
+   if [[ "$SPAMMENOT_HOME" == "" ]]; # check if $SPAMMENOT_HOME defined
+   then
+      echo 'Could not find $SPAMMENOT_HOME in /etc/spammenot/environment'
+      exit 1;
+   fi
+
+   if [[ ! -d "$SPAMMENOT_HOME" ]]; # check if $SPAMMENOT_HOME directory exists
+   then
+      "SPAMMENOT_HOME defined, but it doesn't exist: $SPAMMENOT_HOME"
+      exit 1;
+   fi
+
+   cd $SPAMMENOT_HOME; # enter the $SPAMMENOT_HOME directory
+fi
+
+SELF=$( readlink -f $0 ); # this script
+PERL=$( which perl ); # runs the deamon with my perlbrew if I have one set up
+
+# check if running in DEBUG mode
 [[ "$DEBUG" == "" ]] && DEBUG=0; # ignores $DEBUG if set to 1, else sets it to 0
 
-/usr/bin/sudo DEBUG=$DEBUG $PERL spammenot_daemon.pl
+[[ "$SPAMMENOT_PORT" == "" ]] && SPAMMENOT_PORT=25252
+
+# main sequence determining whether we start/stop/restart or provide status/help message
+case "$1" in
+   start)
+
+      sudo DEBUG=$DEBUG $PERL spammenot_daemon.pl
+
+      sudo DEBUG=$DEBUG $PERL spammenot_backend.pl \
+         --background \
+         --pidfile /var/run/spammenot_backend.pid \
+         --port $SPAMMENOT_BACKEND_PORT
+   ;;
+
+   stop)
+
+      echo -n 'Stopping Spammenot...'
+
+      2>/dev/null
+
+      if [[ ! -f '/var/run/spammenot_daemon.pid' || ! -f '/var/run/spammenot_backend.pid' ]];
+      then
+         echo 'One or more of the PID files for the SpamMeNot services is missing.  This is almost certainly bad.  I will try to cleanly exit any SpamMeNot processes I can find, but you should double check to make sure I did not miss anything';
+      fi
+
+      kill $( cat /var/run/spammenot_daemon.pid );
+      kill $( cat /var/run/spammenot_backend.pid );
+
+      sleep 2;
+
+      ps aufx | grep -P 'spammenot_(daemon|backend)' | grep -v grep | awk '{ print $2 }' | xargs kill
+
+      sleep 2;
+
+      ps aufx | grep -P 'spammenot_(daemon|backend)' | grep -v grep | awk '{ print $2 }' | xargs kill -9
+
+      rm -f /var/run/spammenot_daemon.pid
+      rm -f /var/run/spammenot_backend.pid
+
+      echo 'OK'
+   ;;
+
+   restart)
+   ;;
+
+   status)
+   ;;
+
+   *)
+      echo "Usage: $SELF start|stop|restart|status"
+      exit 1
+   ;;
+esac
 
 exit $?;
+

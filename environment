@@ -1,0 +1,16 @@
+#!/bin/bash
+
+# Place this file in the /etc/spammenot/ directory.
+# It should be named "environment".  e.g.- /etc/spammenot/environment
+
+# define the directory where you have installed spammenot
+export SPAMMENOT_HOME=/home/superman/nocloud/projects/personal/perl/mongers/spammenot
+
+# TCP port for SpamMeNot *backend* server (you _really_ shouldn't change this)
+export SPAMMENOT_BACKEND_PORT=25252
+
+# define your $PATH and include your perlbrew (if any) in the $PATH below
+export PATH=/home/superman/perl5/perlbrew/bin:/home/superman/perl5/perlbrew/perls/perl-tommydev/bin:/usr/local/bin:/usr/bin
+
+# define your $PERLBREW_PATH variable, if you are running spammenot in a perlbrew (and you should be)
+export PERLBREW_PATH=/home/superman/perl5/perlbrew/bin:/home/superman/perl5/perlbrew/perls/perl-tommydev/bin

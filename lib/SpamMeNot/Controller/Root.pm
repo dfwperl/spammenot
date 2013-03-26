@@ -120,9 +120,7 @@ sub vrfy :Local
 {
    my ( $self, $c ) = @_;
 
-   my $input = $c->request->param('input');
-
-   $c->response->body( 'VRFY => ' . Dumper $c->session );
+   $c->response->body( '550: Sorry buddy, we do not VRFY' );
 }
 
 
