@@ -1,13 +1,15 @@
 package SpamMeNot::Controller::Root;
+
+use utf8;
+
 use Moose;
 use namespace::autoclean;
 
 BEGIN { extends 'Catalyst::Controller' }
 
-use utf8;
-
 use Data::Dumper;
-use Storable qw( lock_store );
+use Storable qw( lock_store ); # already used by Catalyst anyway
+use Net::IDN::Encode;
 
 #
 # Sets the actions in this controller to be registered with no prefix
@@ -29,7 +31,11 @@ sub helo :Local
 
    my $input = $c->request->param('input');
 
-   $c->response->body( 'HELO => ' . Dumper $c->session );
+   chomp $input;
+
+   my $safe_response = sprintf '250 helo %s', $input;
+
+   $c->response->body( $safe_response );
 }
 
 
@@ -37,9 +43,31 @@ sub ehlo :Local
 {
    my ( $self, $c ) = @_;
 
-   my $input = $c->request->param('input');
+   my $hostname = $c->request->param('input');
 
-   $c->response->body( 'EHLO => ' . Dumper $c->session );
+   $hostname =~ s/[[:space:]\r\n]+//g;
+
+   my $check_name = Net::IDN::Encode::domain_to_ascii( $hostname );
+      $check_name =~ tr/[\.\-]/0/; # the only punctuation allowed in a domainname
+      $check_name = ( $check_name ) =~ s/([^[:alnum:]])//g;
+
+   $c->detach
+      ( error => [
+            sprintf '503 you sent me %d pieces garbage, hippie!', $check_name
+         ]
+      ) if $check_name;
+
+   $hostname = Net::IDN::Encode::domain_to_ascii( $hostname );
+
+   my $digged = qx(/usr/bin/dig +short a "$hostname") || 'NOTHING';
+
+   ( $digged ) = split /\n/, $digged;
+
+   $c->detach( error => [ '503 Error: your bogus hostname could not be resolved' ] )
+      unless $digged;
+
+   $c->response->body( 'EHLO => ' . $digged );
+
 }
 
 
@@ -207,16 +235,24 @@ sub begin :Private
 {
    my ( $self, $c ) = @_;
 
-   # we always respond with UTF-8 text
-   $c->response->header( 'Content-type' => 'text/plain; charset=utf-8' );
-
    # every request to the Catalyst app from the daemon must include a UUID
-   $c->log->error('Request did not include the mandatory UUID parameter!')
-      and $c->detach( 'error' )
-         unless $c->request->param('uuid');
+   unless ( $c->req->param( 'uuid' ) )
+   {
+      $c->log->error('Request did not include the mandatory UUID parameter!')
+         and $c->detach( 'error' )
+   }
 
-   $c->session( uuid => $c->request->param('uuid') ) # the first session call
-      unless $c->session->{uuid};
+   unless ( $c->session->{uuid} )
+   {
+      $c->session( uuid => $c->request->param('uuid') ) # first session call
+         if $c->request->param('uuid')
+   }
+
+   unless ( $c->session->{peer} )
+   {
+      $c->session( peer => $c->request->param('peer') ) # first session call
+         if $c->request->param('peer')
+   }
 
    $c->log->error('Session ID mismatch!')
       and $c->detach('error')
@@ -287,11 +323,23 @@ sub default :Path
 
 sub end : ActionClass('RenderView')
 {
-   return;
-
    my ( $self, $c ) = @_;
 
-   $c->log->warn( Dumper $c->session );
+   if ( scalar @{ $c->error } )
+   {
+      for my $error ( @{ $c->error } )
+      {
+          $c->log->error( $error );
+      }
+
+      $c->response->status( 500 );
+
+      $c->response->body( '500 Error: internal server error (that sucks)' );
+   }
+
+   $c->forward( 'TXT' );
+
+   $c->clear_errors;
 }
 
 

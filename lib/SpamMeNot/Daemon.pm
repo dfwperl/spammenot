@@ -74,9 +74,10 @@ sub start_session
 
    $self->session( peer => $ip );
 
-   print <<__BANNER__;
-220 Hello $ip - This is a SpamMeNot SMTP server, so we won't be needing viagra
-__BANNER__
+   my $banner = $self->session->{config}->{banner} ||
+      q(This is a SpamMeNot SMTP server);
+
+   printf "220 Hello $ip - %s\n", $banner;
 
    # provides ordered warning messages while logging
    my $warn_count = 0;

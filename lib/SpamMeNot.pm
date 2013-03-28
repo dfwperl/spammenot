@@ -18,6 +18,10 @@ BEGIN
       or die "Can't log SpamMeNot Catalyst errors! $!";
 
    open STDERR, '>&', $err;
+
+   binmode $err, ':unix:encode(UTF-8)';
+   binmode STDIN, ':unix:encode(UTF-8)';
+   binmode STDOUT, ':unix:encode(UTF-8)';
 }
 
 # Set flags and add plugins for the application
