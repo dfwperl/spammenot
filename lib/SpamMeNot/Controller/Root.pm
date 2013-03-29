@@ -1,15 +1,12 @@
 package SpamMeNot::Controller::Root;
 
 use utf8;
+use lib 'lib';
 
 use Moose;
 use namespace::autoclean;
 
-BEGIN { extends 'Catalyst::Controller' }
-
-use Data::Dumper;
-use Storable qw( lock_store ); # already used by Catalyst anyway
-use Net::IDN::Encode;
+BEGIN { extends 'Catalyst::Controller', 'SpamMeNot::AppUtil'; }
 
 #
 # Sets the actions in this controller to be registered with no prefix
@@ -17,25 +14,45 @@ use Net::IDN::Encode;
 #
 __PACKAGE__->config( namespace => '' );
 
+use Data::Dumper;
+use Storable qw( lock_store ); # already used by Catalyst anyway
+use Net::IDN::Encode;
+
 =head1 SUPPORTED COMMANDS
 
-HELO     EHLO     AUTH     RSET     NOOP     HELP
-MAIL     RCPT     DATA     VRFY     QUIT     MOO
+   HELO     EHLO     AUTH     RSET     NOOP     HELP
+   MAIL     RCPT     DATA     VRFY     QUIT     MOO
 
 =cut
+
+our @supported_commands = qw(
+   HELO     EHLO     AUTH     RSET     NOOP     HELP
+   MAIL     RCPT     DATA     VRFY     QUIT     MOO
+);
+
+# we don't (yet) support things like STARTTLS or PIPELINING or
+# else they would be placed in the array variable below
+
+our @extended_commands = qw( NONE );
 
 
 sub helo :Local
 {
    my ( $self, $c ) = @_;
 
-   my $input = $c->request->param('input');
+   $c->detach( error => [ '503 Error: you already said HELO' ] )
+      if $self->already_sent( $c => 'ehlo' );
 
-   chomp $input;
+   $c->detach( error => [ '503 Error: you already said EHLO' ] )
+      if $self->already_sent( $c => 'ehlo' );
 
-   my $safe_response = sprintf '250 helo %s', $input;
+   my $input = $self->trim( $c->request->param('input') // '' );
 
-   $c->response->body( $safe_response );
+   $input =~ s/[^[:alnum:]\.\-]//g;
+
+   $input = sprintf '250 helo %s', $input;
+
+   $c->response->body( $input );
 }
 
 
@@ -43,31 +60,26 @@ sub ehlo :Local
 {
    my ( $self, $c ) = @_;
 
-   my $hostname = $c->request->param('input');
+   $c->detach( error => [ '503 Error: you already said EHLO' ] )
+      if $self->already_sent( $c => 'ehlo' );
 
-   $hostname =~ s/[[:space:]\r\n]+//g;
+   $c->detach( error => [ '503 Error: you already said HELO' ] )
+      if $self->already_sent( $c => 'helo' );
 
-   my $check_name = Net::IDN::Encode::domain_to_ascii( $hostname );
-      $check_name =~ tr/[\.\-]/0/; # the only punctuation allowed in a domainname
-      $check_name = ( $check_name ) =~ s/([^[:alnum:]])//g;
+   my $hostname = $self->trim( $c->request->param('input') // '' );
 
-   $c->detach
-      ( error => [
-            sprintf '503 you sent me %d pieces garbage, hippie!', $check_name
-         ]
-      ) if $check_name;
+   $hostname = $self->hostname_valid( $hostname );
 
-   $hostname = Net::IDN::Encode::domain_to_ascii( $hostname );
+   $c->detach( error => [ '503: Error invalid syntax' ] )
+      unless $hostname;
 
-   my $digged = qx(/usr/bin/dig +short a "$hostname") || 'NOTHING';
+   $self->just_sent( $c => 'ehlo' );
 
-   ( $digged ) = split /\n/, $digged;
+   my $mailname = $c->config->{host_mail_name};
 
-   $c->detach( error => [ '503 Error: your bogus hostname could not be resolved' ] )
-      unless $digged;
+   my $response = join "\n", map { '250-' . $_ } $mailname, @extended_commands;
 
-   $c->response->body( 'EHLO => ' . $digged );
-
+   $c->response->body( $response );
 }
 
 
@@ -75,9 +87,19 @@ sub auth :Local
 {
    my ( $self, $c ) = @_;
 
-   my $input = $c->request->param('input');
+   $c->detach( error => [ '503 Error: not ready for AUTH' ] )
+      unless
+         $self->already_sent( $c => 'elho' ) ||
+         $self->already_sent( $c => 'helo' );
 
-   $c->response->body( 'AUTH IS A NOOP => ' . Dumper $c->session );
+   $c->detach( error => [ '503 Error: you already said AUTH' ] )
+      if $self->already_sent( $c => 'auth' );
+
+   my $input = $self->trim( $c->request->param('input') // '' );
+
+   $self->just_sent( $c => 'auth' );
+
+   $c->response->body( 'AUTH IS A NOOP (for now)' );
 }
 
 
@@ -85,9 +107,7 @@ sub rset :Local
 {
    my ( $self, $c ) = @_;
 
-   my $input = $c->request->param('input');
-
-   $c->response->body( 'RSET YOSELF => ' . Dumper $c->session );
+   $c->detach( error => [ '503 Error: no RSET' ] );
 }
 
 
@@ -95,9 +115,9 @@ sub noop :Local
 {
    my ( $self, $c ) = @_;
 
-   my $input = $c->request->param('input');
+   # this is actually required per RFC.
 
-   $c->response->body( 'NOOP => ' . Dumper $c->session );
+   $c->response->body( '250 Ok' );
 }
 
 
@@ -105,9 +125,7 @@ sub help :Local
 {
    my ( $self, $c ) = @_;
 
-   my $input = $c->request->param('input');
-
-   $c->response->body( 'HELP => ' . Dumper $c->session );
+   $c->response->body( '503 Error: see http://tools.ietf.org/html/rfc2821' );
 }
 
 
@@ -115,9 +133,19 @@ sub mail :Local
 {
    my ( $self, $c ) = @_;
 
-   my $input = $c->request->param('input');
+   $c->detach( error => [ '503 Error: not ready for MAIL' ] )
+      unless
+         $self->already_sent( $c => 'elho' ) ||
+         $self->already_sent( $c => 'helo' );
 
-   $c->response->body( 'MAIL => ' . Dumper $c->session );
+   $c->detach( error => [ '503 Error: you already said MAIL' ] )
+      if $self->already_sent( $c => 'mail' );
+
+   $self->just_sent( $c => 'mail' );
+
+   my $input = $self->trim( $c->request->param('input') // '' );
+
+   $c->response->body( '250 Ok' );
 }
 
 
@@ -125,9 +153,14 @@ sub rcpt :Local
 {
    my ( $self, $c ) = @_;
 
+   $c->detach( error => [ '503 Error: not ready for RCPT' ] )
+      unless
+         $self->already_sent( $c => 'elho' ) ||
+         $self->already_sent( $c => 'helo' );
+
    my $input = $c->request->param('input');
 
-   $c->response->body( 'RCPT => ' . Dumper $c->session );
+   $c->response->body( '250 Ok' );
 }
 
 
@@ -135,10 +168,20 @@ sub data :Local
 {
    my ( $self, $c ) = @_;
 
-   $c->detach( error => [ '503 You already sent your message' ] )
-      if $c->session->{data_was_sent};
+   $c->detach( error => [ '503 Error: not ready for DATA' ] )
+      unless
+      (
+         (
+            $self->already_sent( $c => 'elho' ) ||
+            $self->already_sent( $c => 'helo' )
+         )
+         && $self->already_sent( $c => qw/ mail rcpt / )
+      );
 
-   $c->session( ready_for_data => 1 );
+   $c->detach( error => [ '503 You already sent your message' ] )
+      if $self->already_sent( $c => 'data' );
+
+   $self->just_sent( $c => 'data' );
 
    $c->response->body( '354 Send message content; end with <CRLF>.<CRLF>' );
 }
@@ -148,7 +191,7 @@ sub vrfy :Local
 {
    my ( $self, $c ) = @_;
 
-   $c->response->body( '550: Sorry buddy, we do not VRFY' );
+   $c->response->body( '550 Error: sorry, I do not VRFY' );
 }
 
 
@@ -156,7 +199,7 @@ sub moo :Local
 {
    my ( $self, $c ) = @_;
 
-   $c->response->body( 'These are not the droids you\'re looking for.' );
+   $c->response->body( '200 These are not the droids you\'re looking for.' );
 }
 
 
@@ -164,9 +207,38 @@ sub quit :Local
 {
    my ( $self, $c ) = @_;
 
-   $c->delete_session();
+   $c->delete_session( 'Remote user has QUIT' );
 
    $c->response->body( '221 Bye' );
+}
+
+
+sub already_sent :Private
+{
+   my ( $self, $c, @args ) = @_;
+
+   $c->session->{_conversation} //= {};
+
+   for my $arg ( @args )
+   {
+      return unless $c->session->{_conversation}->{ $arg };
+   }
+
+   return 1;
+}
+
+
+sub just_sent :Private
+{
+   my ( $self, $c, $arg, $val ) = @_;
+
+   $val //= 1;
+
+   $c->session->{_conversation} //= {};
+
+   $c->session->{_conversation}->{ $arg } = $val;
+
+   return $c->session->{_conversation}->{ $arg };
 }
 
 
@@ -269,7 +341,7 @@ sub begin :Private
       )
    )
    {
-      $c->detach( error => 'You already sent your message.  Please QUIT.' );
+      $c->detach( error => [ 'You already sent your message.  Please QUIT' ] );
    }
 
    $c->session->{conversation} //= [];

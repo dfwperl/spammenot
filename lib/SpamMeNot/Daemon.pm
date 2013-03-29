@@ -77,7 +77,9 @@ sub start_session
    my $banner = $self->session->{config}->{banner} ||
       q(This is a SpamMeNot SMTP server);
 
-   printf "220 Hello $ip - %s\n", $banner;
+   my $mailname = $self->session->{config}->{host_mail_name};
+
+   printf "220 %s - %s\n", $mailname, $banner;
 
    # provides ordered warning messages while logging
    my $warn_count = 0;
@@ -165,6 +167,9 @@ sub converse
    my ( $self, $input ) = @_;
 
    my ( $smtp_command, $smtp_arg ) = split / /, $input, 2;
+
+   $self->session( error => '503: You\'re a jerk' )
+      and return if $smtp_command =~ /[^\r\n[:alnum:]\-\=]/;
 
    $smtp_command = lc $smtp_command;
 
@@ -304,6 +309,7 @@ sub ready_for_data
 
    return $input =~ /^DATA$/i && !$self->session->{data_was_sent};
 }
+
 
 sub ready_to_quit
 {
